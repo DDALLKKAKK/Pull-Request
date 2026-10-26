@@ -67,6 +67,7 @@
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
     import { TessellateModifier } from 'three/addons/modifiers/TessellateModifier.js';
+    import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
     // Wiggle Bones for three.js (MIT) by Xavier (Jack), https://wiggle.three.tools/
     import { WiggleBone } from 'wiggle/spring';
 
@@ -296,34 +297,50 @@
     rig.updateMatrixWorld(true);
     const skeleton = new THREE.Skeleton(bones);
 
-    function boneWeights(arc) {
-      // past: how far this vertex is past the next joint (0 → 1 across its blend zone)
-      const w = [];
-      let prevPast = 1;
-      for (let j = 0; j < BONE_ARCS.length; j++) {
-        const past = j + 1 < BONE_ARCS.length ? smooth(BONE_MIDS[j], BONE_MIDS[j + 1], arc) : 0;
-        w.push(Math.max(0, prevPast - past));
-        prevPast = past;
-      }
-      return w;
+    // The stem, calyx and the top of the body all ride on the first spring bone
+    // as one piece (the static root only carries the grip), and bending starts
+    // just below the calyx rim. If a joint fell inside the calyx, the calyx
+    // shell and the body under it would bend apart and show as two layers.
+    function boneWeights(arc, calyxEnd) {
+      const zones = [
+        [calyxEnd, Math.max(calyxEnd + 0.3, BONE_MIDS[2])],   // bone 1 → 2
+        [Math.max(calyxEnd + 0.3, BONE_MIDS[2]), BONE_MIDS[3]], // bone 2 → 3
+        [BONE_MIDS[3], BONE_MIDS[4]],                           // bone 3 → 4
+      ];
+      const past = zones.map(([a, b]) => smooth(a, b, arc));
+      return [0, 1 - past[0], past[0] - past[1], past[1] - past[2], past[2]].map((v) => Math.max(0, v));
     }
 
-    function rigMesh(source) {
-      const baked = source.geometry.clone();
-      // bake the file's node transforms, then undo its overall 0.01 scale
-      baked.applyMatrix4(source.matrixWorld);
-      const s = 1 / source.matrixWorld.getMaxScaleOnAxis();
-      baked.scale(s, s, s);
-      // The model is low-poly (long faces run across the joints), so it is
-      // split into small triangles first; otherwise each face bends as a flat
-      // plate and the plate edges show while it moves.
-      const geo = new TessellateModifier(0.12, 8).modify(baked);
+    // Body and calyx come as separate meshes in the file; they are merged into
+    // one skinned mesh so the whole eggplant deforms as a single surface.
+    function rigModel(sources) {
+      const s = 1 / sources[0].matrixWorld.getMaxScaleOnAxis();
+      const pieces = sources.map((source) => {
+        const baked = source.geometry.clone();
+        // bake the file's node transforms, then undo its overall 0.01 scale
+        baked.applyMatrix4(source.matrixWorld);
+        baked.scale(s, s, s);
+        // The model is low-poly (long faces run across the joints), so it is
+        // split into small triangles first; otherwise each face bends as a flat
+        // plate and the plate edges show while it moves.
+        return new TessellateModifier(0.12, 8).modify(baked);
+      });
 
+      // how far down the centre line the calyx reaches (its rim)
+      let calyxEnd = 0;
+      sources.forEach((source, k) => {
+        if (!/Hat/i.test(source.name)) return;
+        const p = pieces[k].attributes.position;
+        for (let i = 0; i < p.count; i++) calyxEnd = Math.max(calyxEnd, arcLength(p.getX(i), p.getY(i)));
+      });
+      if (!calyxEnd) calyxEnd = BONE_ARCS[2] - 0.15;
+
+      const geo = mergeGeometries(pieces);
       const pos = geo.attributes.position;
       const idx = new Uint16Array(pos.count * 4);
       const wgt = new Float32Array(pos.count * 4);
       for (let i = 0; i < pos.count; i++) {
-        const w = boneWeights(arcLength(pos.getX(i), pos.getY(i)));
+        const w = boneWeights(arcLength(pos.getX(i), pos.getY(i)), calyxEnd);
         // keep the four strongest influences
         const top = w.map((v, b) => [v, b]).sort((a, b) => b[0] - a[0]).slice(0, 4);
         const sum = top.reduce((a, [v]) => a + v, 0) || 1;
@@ -337,7 +354,7 @@
 
       // keep the model's colour texture, give it the glossy metallic finish of 🍆.ws
       const material = new THREE.MeshPhysicalMaterial({
-        map: source.material.map,
+        map: sources[0].material.map,
         metalness: 0.92,
         roughness: 0.5,
         side: THREE.DoubleSide,
@@ -426,12 +443,9 @@
     const parts = [];
     // the file also carries a display box and frame; only the eggplant is used
     gltf.scene.traverse((o) => { if (o.isMesh && !/^(Box|Frame)/.test(o.name)) parts.push(o); });
-    const bounds = new THREE.Box3();
-    for (const part of parts) {
-      const mesh = rigMesh(part);
-      mesh.geometry.computeBoundingBox();
-      bounds.union(mesh.geometry.boundingBox);
-    }
+    const eggplant = rigModel(parts);
+    eggplant.geometry.computeBoundingBox();
+    const bounds = eggplant.geometry.boundingBox;
 
     // start with the whole emoji centred on screen
     orientRig();
