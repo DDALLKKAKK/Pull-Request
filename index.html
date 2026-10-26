@@ -489,13 +489,13 @@
       });
     }
 
-    // Physics runs on its own fixed 300 Hz clock, independent of the screen's
-    // refresh rate; each frame catches up with as many 3.3 ms steps as are due.
+    // Physics runs on its own fixed 500 Hz clock, independent of the screen's
+    // refresh rate; each frame catches up with as many 2 ms steps as are due.
     // wiggle's springs read Date.now(), so during a step that clock is pointed
     // at the simulated time and every spring advances exactly one step.
-    const SIM_HZ = 300;
+    const SIM_HZ = 500;
     const SIM_MS = 1000 / SIM_HZ;
-    const MAX_STEPS = 30;                         // after a stall, skip ahead instead of spiralling
+    const MAX_STEPS = 50;                         // after a stall, skip ahead instead of spiralling
     const FOLLOW = 24;                            // how fast the grip chases the cursor (1/s)
     const realDateNow = Date.now;
     let simClock = realDateNow();
