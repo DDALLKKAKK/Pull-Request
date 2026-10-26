@@ -66,6 +66,7 @@
     import * as THREE from 'three';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+    import { TessellateModifier } from 'three/addons/modifiers/TessellateModifier.js';
     // Wiggle Bones for three.js (MIT) by Xavier (Jack), https://wiggle.three.tools/
     import { WiggleBone } from 'wiggle/spring';
 
@@ -223,36 +224,30 @@
     }
 
     // ---------- eggplant rig ----------
-    // Centre line of the model, picked from its vertices (model units, the
-    // emoji's own diagonal pose): calyx → upper body → lower body → tip.
-    const CENTER_LINE = [
-      new THREE.Vector2(-1.2, 2.0),
-      new THREE.Vector2(-0.5, 0.6),
-      new THREE.Vector2(0.35, -0.35),
-      new THREE.Vector2(1.5, -1.15),
-    ];
-    const segLen = CENTER_LINE.slice(1).map((p, i) => p.distanceTo(CENTER_LINE[i]));
-    const TOTAL = segLen.reduce((a, b) => a + b, 0);
+    // Centre line of the model, measured from its vertices (model units, the
+    // emoji's own diagonal pose), as a smooth curve from the calyx to the tip.
+    // A smooth line matters: on a polyline the nearest point jumps on the inner
+    // side of each corner, which shows up as a hard seam once the body bends.
+    const centerCurve = new THREE.CatmullRomCurve3([
+      [-1.2, 2.0], [-0.97, 1.35], [-0.73, 1.0], [-0.5, 0.6], [-0.28, 0.25],
+      [-0.01, -0.01], [0.27, -0.31], [0.69, -0.5], [1.13, -0.68], [1.5, -1.15],
+    ].map(([x, y]) => new THREE.Vector3(x, y, 0)), false, 'centripetal');
+    const TOTAL = centerCurve.getLength();
+    const pointAt = (arc) => centerCurve.getPointAt(clamp(arc / TOTAL, 0, 1));
 
-    function pointAt(arc) {
-      for (let i = 0; i < segLen.length; i++) {
-        if (arc <= segLen[i] || i === segLen.length - 1) {
-          return CENTER_LINE[i].clone().lerp(CENTER_LINE[i + 1], clamp(arc / segLen[i], 0, 1));
-        }
-        arc -= segLen[i];
-      }
-    }
+    // dense samples of the curve for nearest-point lookups
+    const SAMPLES = centerCurve.getSpacedPoints(240);
+    const SAMPLE_STEP = TOTAL / 240;
 
     // arc length of the closest point on the centre line
     function arcLength(x, y) {
-      let best = Infinity, arc = 0, acc = 0;
-      for (let i = 0; i < segLen.length; i++) {
-        const a = CENTER_LINE[i], b = CENTER_LINE[i + 1];
+      let best = Infinity, arc = 0;
+      for (let i = 0; i < SAMPLES.length - 1; i++) {
+        const a = SAMPLES[i], b = SAMPLES[i + 1];
         const abx = b.x - a.x, aby = b.y - a.y;
-        const u = clamp(((x - a.x) * abx + (y - a.y) * aby) / (segLen[i] * segLen[i]), 0, 1);
+        const u = clamp(((x - a.x) * abx + (y - a.y) * aby) / (abx * abx + aby * aby), 0, 1);
         const d = Math.hypot(a.x + abx * u - x, a.y + aby * u - y);
-        if (d < best) { best = d; arc = acc + u * segLen[i]; }
-        acc += segLen[i];
+        if (d < best) { best = d; arc = (i + u) * SAMPLE_STEP; }
       }
       return arc;
     }
@@ -260,15 +255,18 @@
     // Same layout as the 🍆.ws rig: a static root at the top of the calyx and
     // four spring bones down the body (heads at these distances along the line).
     const BONE_ARCS = [0, 0.58, 1.38, 2.25, 3.25];
-    const BLEND = 0.22;                           // half-width of each joint's blend zone
+    // each joint blends over the whole stretch between the middles of the
+    // bones on either side, so no part of the body bends as a rigid block
+    const BONE_MIDS = BONE_ARCS.map((a, i) => (a + (i + 1 < BONE_ARCS.length ? BONE_ARCS[i + 1] : TOTAL)) / 2);
     // body radius along the centre line, used for hits (model units)
     const PROBES = [[0, 0.7], [0.6, 0.75], [1.2, 0.75], [1.8, 0.85], [2.4, 0.95], [3.0, 0.95], [3.6, 0.8], [TOTAL - 0.1, 0.45]];
 
     // Rotate so the first segment points straight down: that is the hanging
     // pose. Rotating back by the same angle gives the emoji pose.
-    const first = CENTER_LINE[1].clone().sub(CENTER_LINE[0]);
+    const ORIGIN = pointAt(0);
+    const first = pointAt(BONE_ARCS[1]).sub(ORIGIN);
     const EMOJI_TILT = Math.atan2(first.y, first.x) + Math.PI / 2;
-    const toHang = (v) => new THREE.Vector3(v.x - CENTER_LINE[0].x, v.y - CENTER_LINE[0].y, 0)
+    const toHang = (v) => new THREE.Vector3(v.x - ORIGIN.x, v.y - ORIGIN.y, 0)
       .applyAxisAngle(new THREE.Vector3(0, 0, 1), -EMOJI_TILT);
 
     const heads = BONE_ARCS.map((a) => toHang(pointAt(a)));
@@ -299,11 +297,11 @@
     const skeleton = new THREE.Skeleton(bones);
 
     function boneWeights(arc) {
-      // past[j]: how far this vertex is past joint j (0 → 1 across its blend zone)
+      // past: how far this vertex is past the next joint (0 → 1 across its blend zone)
       const w = [];
       let prevPast = 1;
       for (let j = 0; j < BONE_ARCS.length; j++) {
-        const past = j + 1 < BONE_ARCS.length ? smooth(BONE_ARCS[j + 1] - BLEND, BONE_ARCS[j + 1] + BLEND, arc) : 0;
+        const past = j + 1 < BONE_ARCS.length ? smooth(BONE_MIDS[j], BONE_MIDS[j + 1], arc) : 0;
         w.push(Math.max(0, prevPast - past));
         prevPast = past;
       }
@@ -311,11 +309,15 @@
     }
 
     function rigMesh(source) {
-      const geo = source.geometry.clone();
+      const baked = source.geometry.clone();
       // bake the file's node transforms, then undo its overall 0.01 scale
-      geo.applyMatrix4(source.matrixWorld);
+      baked.applyMatrix4(source.matrixWorld);
       const s = 1 / source.matrixWorld.getMaxScaleOnAxis();
-      geo.scale(s, s, s);
+      baked.scale(s, s, s);
+      // The model is low-poly (long faces run across the joints), so it is
+      // split into small triangles first; otherwise each face bends as a flat
+      // plate and the plate edges show while it moves.
+      const geo = new TessellateModifier(0.12, 8).modify(baked);
 
       const pos = geo.attributes.position;
       const idx = new Uint16Array(pos.count * 4);
@@ -330,7 +332,7 @@
       geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(idx, 4));
       geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(wgt, 4));
 
-      geo.translate(-CENTER_LINE[0].x, -CENTER_LINE[0].y, 0);
+      geo.translate(-ORIGIN.x, -ORIGIN.y, 0);
       geo.rotateZ(-EMOJI_TILT);
 
       // keep the model's colour texture, give it the glossy metallic finish of 🍆.ws
@@ -473,15 +475,37 @@
       });
     }
 
+    // Physics runs on its own fixed 250 Hz clock, independent of the screen's
+    // refresh rate; each frame catches up with as many 4 ms steps as are due.
+    // wiggle's springs read Date.now(), so during a step that clock is pointed
+    // at the simulated time and every spring advances exactly one step.
+    const SIM_HZ = 250;
+    const SIM_MS = 1000 / SIM_HZ;
+    const MAX_STEPS = 25;                         // after a stall, skip ahead instead of spiralling
+    const FOLLOW = 24;                            // how fast the grip chases the cursor (1/s)
+    const realDateNow = Date.now;
+    let simClock = realDateNow();
+    let simBehind = 0;
+
+    function simStep() {
+      rig.position.lerp(target, 1 - Math.exp(-FOLLOW / SIM_HZ));
+      orientRig();
+      rig.updateMatrixWorld(true);
+      simClock += SIM_MS;
+      Date.now = () => simClock;
+      try { wiggles.forEach((w) => w.step()); }
+      finally { Date.now = realDateNow; }
+    }
+
     let prev = performance.now();
     function frame(now) {
+      simBehind += now - prev;
       const dt = Math.min((now - prev) / 1000, 1 / 20);
       prev = now;
 
-      rig.position.lerp(target, Math.min(20 * dt, 1));
-      orientRig();
-      rig.updateMatrixWorld(true);
-      wiggles.forEach((w) => w.update());
+      let steps = 0;
+      while (simBehind >= SIM_MS && steps < MAX_STEPS) { simStep(); simBehind -= SIM_MS; steps++; }
+      if (steps === MAX_STEPS) simBehind = 0;
 
       // the eggplant only knocks letters once someone is moving it
       updateProbes(dt);
