@@ -591,23 +591,35 @@
       finally { Date.now = realDateNow; }
     }
 
-    // On a fast sideways swing the joints inside the body can each bend so far
-    // that the lower body folds back over the upper body, and the overlap reads
-    // as stacked layers. Before drawing, each body joint's bend is eased into a
-    // ceiling (tanh: small bends untouched, large ones flattened out, no hard
-    // stop). The first spring bone swings the whole eggplant and is left free.
-    // wiggle recomputes every bone from its springs on the next step, so this
-    // only shapes what is drawn and never feeds back into the physics.
-    const FOLD_MAX = 0.6;                         // rad, per body joint
+    // On a fast sideways swing the joints inside the body can together curl the
+    // lower body back over the upper body, and the overlap reads as stacked
+    // layers. What causes it is the total curl, not any one joint, so before
+    // drawing: each body joint keeps its bend untouched up to a knee and only
+    // then eases toward a ceiling, and the three together ease toward a total
+    // that can't fold the body onto itself. Ordinary swings pass through as
+    // they are, so the motion keeps its flow. The first spring bone swings the
+    // whole eggplant and is left free. wiggle recomputes every bone from its
+    // springs on the next step, so this only shapes what is drawn.
+    const JOINT_KNEE = 0.8, JOINT_MAX = 1.3;      // rad, per body joint
+    const CURL_KNEE = 1.3, CURL_MAX = 2.1;        // rad, all body joints together
     const _rest = new THREE.Quaternion();
+    const _bent = new THREE.Quaternion();
+    const softCap = (a, knee, max) => (a <= knee ? a : knee + (max - knee) * Math.tanh((a - knee) / (max - knee)));
 
     function limitFolds() {
+      const joints = [];
+      let curl = 0;
       for (let i = 2; i < bones.length; i++) {
         const q = bones[i].quaternion;
         const angle = 2 * Math.acos(Math.min(1, Math.abs(q.w)));
+        const eased = softCap(angle, JOINT_KNEE, JOINT_MAX);
+        joints.push({ q, angle, eased });
+        curl += eased;
+      }
+      const share = curl > 1e-4 ? softCap(curl, CURL_KNEE, CURL_MAX) / curl : 1;
+      for (const { q, angle, eased } of joints) {
         if (angle < 1e-4) continue;
-        const eased = FOLD_MAX * Math.tanh(angle / FOLD_MAX);
-        q.slerpQuaternions(_rest, q.clone(), eased / angle);
+        q.slerpQuaternions(_rest, _bent.copy(q), (eased * share) / angle);
       }
       rig.updateMatrixWorld(true);
     }
