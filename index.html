@@ -297,18 +297,88 @@
     rig.updateMatrixWorld(true);
     const skeleton = new THREE.Skeleton(bones);
 
-    // The stem, calyx and the top of the body all ride on the first spring bone
-    // as one piece (the static root only carries the grip), and bending starts
-    // just below the calyx rim. If a joint fell inside the calyx, the calyx
-    // shell and the body under it would bend apart and show as two layers.
-    function boneWeights(arc, calyxEnd) {
-      const zones = [
-        [calyxEnd, Math.max(calyxEnd + 0.3, BONE_MIDS[2])],   // bone 1 → 2
-        [Math.max(calyxEnd + 0.3, BONE_MIDS[2]), BONE_MIDS[3]], // bone 2 → 3
-        [BONE_MIDS[3], BONE_MIDS[4]],                           // bone 3 → 4
-      ];
-      const past = zones.map(([a, b]) => smooth(a, b, arc));
+    // Weights depend only on how far down the centre line a point sits, so the
+    // stem, the calyx and the body under it get exactly the same deformation
+    // wherever they overlap and move as one object. The static root only
+    // carries the grip; everything from the stem down rides the spring bones,
+    // each joint blending over the stretch between neighbouring bone middles.
+    function boneWeights(arc) {
+      const past = [1, 2, 3].map((j) => smooth(BONE_MIDS[j], BONE_MIDS[j + 1], arc));
       return [0, 1 - past[0], past[0] - past[1], past[1] - past[2], past[2]].map((v) => Math.max(0, v));
+    }
+
+    // Dual-quaternion skinning. three.js blends bone matrices linearly, which
+    // pinches the body into a thin neck at sharp bends; the calyx shell then
+    // pulls away from the body under it and the two read as separate layers.
+    // Blending rotations as dual quaternions keeps the volume at any bend.
+    // (Bones here carry the rig's uniform scale, so it is factored out first.)
+    const DQ_FUNCS = /* glsl */`
+      vec4 dqQuatFromMat(mat3 m) {
+        float tr = m[0][0] + m[1][1] + m[2][2];
+        if (tr > 0.0) {
+          float s = sqrt(tr + 1.0) * 2.0;
+          return vec4((m[1][2] - m[2][1]) / s, (m[2][0] - m[0][2]) / s, (m[0][1] - m[1][0]) / s, 0.25 * s);
+        } else if (m[0][0] > m[1][1] && m[0][0] > m[2][2]) {
+          float s = sqrt(1.0 + m[0][0] - m[1][1] - m[2][2]) * 2.0;
+          return vec4(0.25 * s, (m[1][0] + m[0][1]) / s, (m[2][0] + m[0][2]) / s, (m[1][2] - m[2][1]) / s);
+        } else if (m[1][1] > m[2][2]) {
+          float s = sqrt(1.0 + m[1][1] - m[0][0] - m[2][2]) * 2.0;
+          return vec4((m[1][0] + m[0][1]) / s, 0.25 * s, (m[2][1] + m[1][2]) / s, (m[2][0] - m[0][2]) / s);
+        } else {
+          float s = sqrt(1.0 + m[2][2] - m[0][0] - m[1][1]) * 2.0;
+          return vec4((m[2][0] + m[0][2]) / s, (m[2][1] + m[1][2]) / s, 0.25 * s, (m[0][1] - m[1][0]) / s);
+        }
+      }
+      vec4 dqMul(vec4 a, vec4 b) {
+        return vec4(a.w * b.xyz + b.w * a.xyz + cross(a.xyz, b.xyz), a.w * b.w - dot(a.xyz, b.xyz));
+      }
+      vec3 dqRotate(vec4 q, vec3 v) {
+        return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
+      }
+      // adds one bone's rigid transform, as (real, dual) quaternions, to the blend
+      void dqAccumulate(mat4 bone, float weight, vec4 pivot, inout vec4 real, inout vec4 dual, inout float scale) {
+        if (weight <= 0.0) return;
+        float s = length(bone[0].xyz);
+        vec4 qr = dqQuatFromMat(mat3(bone[0].xyz / s, bone[1].xyz / s, bone[2].xyz / s));
+        vec4 qd = 0.5 * dqMul(vec4(bone[3].xyz, 0.0), qr);
+        if (dot(qr, pivot) < 0.0) { qr = -qr; qd = -qd; }     // same hemisphere as the first bone
+        real += weight * qr;
+        dual += weight * qd;
+        scale += weight * s;
+      }
+    `;
+
+    const DQ_BLEND = /* glsl */`
+      #ifdef USE_SKINNING
+        vec4 dqReal = vec4(0.0), dqDual = vec4(0.0);
+        float dqScale = 0.0;
+        vec4 dqPivot = dqQuatFromMat(mat3(normalize(boneMatX[0].xyz), normalize(boneMatX[1].xyz), normalize(boneMatX[2].xyz)));
+        dqAccumulate(boneMatX, skinWeight.x, dqPivot, dqReal, dqDual, dqScale);
+        dqAccumulate(boneMatY, skinWeight.y, dqPivot, dqReal, dqDual, dqScale);
+        dqAccumulate(boneMatZ, skinWeight.z, dqPivot, dqReal, dqDual, dqScale);
+        dqAccumulate(boneMatW, skinWeight.w, dqPivot, dqReal, dqDual, dqScale);
+        float dqLen = length(dqReal);
+        dqReal /= dqLen;
+        dqDual /= dqLen;
+        vec3 dqMove = 2.0 * dqMul(dqDual, vec4(-dqReal.xyz, dqReal.w)).xyz;
+        objectNormal = dqRotate(dqReal, objectNormal);
+      #endif
+    `;
+
+    const DQ_POSITION = /* glsl */`
+      #ifdef USE_SKINNING
+        vec3 dqLocal = (bindMatrix * vec4(transformed, 1.0)).xyz;
+        transformed = (bindMatrixInverse * vec4(dqScale * dqRotate(dqReal, dqLocal) + dqMove, 1.0)).xyz;
+      #endif
+    `;
+
+    function useDualQuaternionSkinning(material) {
+      material.onBeforeCompile = (shader) => {
+        shader.vertexShader = shader.vertexShader
+          .replace('void main() {', DQ_FUNCS + '\nvoid main() {')
+          .replace('#include <skinnormal_vertex>', DQ_BLEND)
+          .replace('#include <skinning_vertex>', DQ_POSITION);
+      };
     }
 
     // Body and calyx come as separate meshes in the file; they are merged into
@@ -326,21 +396,12 @@
         return new TessellateModifier(0.12, 8).modify(baked);
       });
 
-      // how far down the centre line the calyx reaches (its rim)
-      let calyxEnd = 0;
-      sources.forEach((source, k) => {
-        if (!/Hat/i.test(source.name)) return;
-        const p = pieces[k].attributes.position;
-        for (let i = 0; i < p.count; i++) calyxEnd = Math.max(calyxEnd, arcLength(p.getX(i), p.getY(i)));
-      });
-      if (!calyxEnd) calyxEnd = BONE_ARCS[2] - 0.15;
-
       const geo = mergeGeometries(pieces);
       const pos = geo.attributes.position;
       const idx = new Uint16Array(pos.count * 4);
       const wgt = new Float32Array(pos.count * 4);
       for (let i = 0; i < pos.count; i++) {
-        const w = boneWeights(arcLength(pos.getX(i), pos.getY(i)), calyxEnd);
+        const w = boneWeights(arcLength(pos.getX(i), pos.getY(i)));
         // keep the four strongest influences
         const top = w.map((v, b) => [v, b]).sort((a, b) => b[0] - a[0]).slice(0, 4);
         const sum = top.reduce((a, [v]) => a + v, 0) || 1;
@@ -359,6 +420,7 @@
         roughness: 0.5,
         side: THREE.DoubleSide,
       });
+      useDualQuaternionSkinning(material);
       const mesh = new THREE.SkinnedMesh(geo, material);
       mesh.bind(skeleton);
       mesh.frustumCulled = false;
