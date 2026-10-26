@@ -293,139 +293,21 @@
     });
     rig.updateMatrixWorld(true);
 
-    // ---------- render chain ----------
-    // The four wiggle bones do the physics, but they are too far apart to skin
-    // with: a big swing turns the body around one short stretch, the inside of
-    // the bend gets a radius smaller than the body is thick, and the folded
-    // flesh reads as stacked layers. So the mesh hangs on a dense chain of
-    // render bones instead (one every RENDER_STEP down the body), and each
-    // physics joint's bend is shared out over the render joints around it.
-    // The same swing then becomes one long, smooth arc.
-    //
-    // Everything above `rigidUntil` (stem, calyx and the body under it) rides
-    // wiggle bone 1 as one piece, so the calyx shell and the body beneath it
-    // always get exactly the same transform and no sliver shows at the rim.
-    const RENDER_STEP = 0.2;
-    // half-width of each physics joint's share (model units). Wide enough that
-    // even the biggest allowed bend keeps a radius larger than the body is thick.
-    const SPREAD = 1.5;
-    const renderBones = [];
-    const renderArcs = [];
-    const renderTip = new THREE.Vector3();        // tip, in the last render bone's space
-    let shares = [];                              // shares[j][k]: part of physics joint j+2's bend at render joint k
-    // rest rotation of physics bones 2..4 relative to bone 1 (to bring their bends into bone 1's frame)
-    const restFromBone1 = [2, 3, 4].map((j) => boneQuats[1].clone().invert().multiply(boneQuats[j]));
-
-    function buildRenderChain(rigidUntil) {
-      const toBone1 = boneQuats[1].clone().invert();
-      for (let a = rigidUntil + RENDER_STEP / 2; a < TOTAL - RENDER_STEP; a += RENDER_STEP) renderArcs.push(a);
-      let prevPoint = heads[1];
-      renderArcs.forEach((a, k) => {
-        const p = toHang(pointAt(a));
-        const bone = new THREE.Bone();
-        bone.position.copy(p).sub(prevPoint).applyQuaternion(toBone1);
-        (k === 0 ? bones[1] : renderBones[k - 1]).add(bone);
-        renderBones.push(bone);
-        prevPoint = p;
-      });
-      renderTip.copy(tipHang).sub(prevPoint).applyQuaternion(toBone1);
-
-      const bump = (d) => (Math.abs(d) < SPREAD ? 0.5 + 0.5 * Math.cos(Math.PI * d / SPREAD) : 0);
-      // fade in below the calyx, so a joint close to it doesn't pile its whole
-      // bend into the first few render joints and crease the body there
-      const fadeIn = (a) => smooth(rigidUntil, rigidUntil + 0.7, a);
-      shares = [2, 3, 4].map((j) => {
-        const raw = renderArcs.map((a) => bump(a - BONE_ARCS[j]) * fadeIn(a));
-        const sum = raw.reduce((s, v) => s + v, 0);
-        if (sum > 0) return raw.map((v) => v / sum);
-        // joint sits outside the render chain: give it all to the nearest render joint
-        const near = renderArcs.reduce((b, a, k) => (Math.abs(a - BONE_ARCS[j]) < Math.abs(renderArcs[b] - BONE_ARCS[j]) ? k : b), 0);
-        return raw.map((_, k) => (k === near ? 1 : 0));
-      });
-    }
-
-    // skin weights by position on the centre line: wiggle bone 1 down to the
-    // first render joint, then a soft hand-over at every render joint
+    // ---------- skin weights ----------
+    // Broad, overlapping weights, the way a hand-painted rig does it. Every
+    // hand-over is long: the first (bouncy) spring bone owns the stem, calyx
+    // and upper body and fades out slowly down to mid-body; the last (syrupy)
+    // bone takes over the lower half, with bones 2 and 3 shared in between.
+    // Points are carried by two to four bones at once, so a swing spreads down
+    // the body like jelly instead of turning at a hinge, which would crease
+    // and show as layers. Inside the calyx the weights barely change, so the
+    // shell and the body under it move as one.
     function skinWeights(arc) {
-      const h = RENDER_STEP / 2;
-      const past = renderArcs.map((a) => smooth(a - h, a + h, arc));
-      const w = [[1, 1 - past[0]]];
-      past.forEach((p, k) => w.push([bones.length + k, p - (k + 1 < past.length ? past[k + 1] : 0)]));
-      return w.filter(([, v]) => v > 0);
-    }
-
-    // Dual-quaternion skinning. three.js blends bone matrices linearly, which
-    // pinches the body into a thin neck at sharp bends; the calyx shell then
-    // pulls away from the body under it and the two read as separate layers.
-    // Blending rotations as dual quaternions keeps the volume at any bend.
-    // (Bones here carry the rig's uniform scale, so it is factored out first.)
-    const DQ_FUNCS = /* glsl */`
-      vec4 dqQuatFromMat(mat3 m) {
-        float tr = m[0][0] + m[1][1] + m[2][2];
-        if (tr > 0.0) {
-          float s = sqrt(tr + 1.0) * 2.0;
-          return vec4((m[1][2] - m[2][1]) / s, (m[2][0] - m[0][2]) / s, (m[0][1] - m[1][0]) / s, 0.25 * s);
-        } else if (m[0][0] > m[1][1] && m[0][0] > m[2][2]) {
-          float s = sqrt(1.0 + m[0][0] - m[1][1] - m[2][2]) * 2.0;
-          return vec4(0.25 * s, (m[1][0] + m[0][1]) / s, (m[2][0] + m[0][2]) / s, (m[1][2] - m[2][1]) / s);
-        } else if (m[1][1] > m[2][2]) {
-          float s = sqrt(1.0 + m[1][1] - m[0][0] - m[2][2]) * 2.0;
-          return vec4((m[1][0] + m[0][1]) / s, 0.25 * s, (m[2][1] + m[1][2]) / s, (m[2][0] - m[0][2]) / s);
-        } else {
-          float s = sqrt(1.0 + m[2][2] - m[0][0] - m[1][1]) * 2.0;
-          return vec4((m[2][0] + m[0][2]) / s, (m[2][1] + m[1][2]) / s, 0.25 * s, (m[0][1] - m[1][0]) / s);
-        }
-      }
-      vec4 dqMul(vec4 a, vec4 b) {
-        return vec4(a.w * b.xyz + b.w * a.xyz + cross(a.xyz, b.xyz), a.w * b.w - dot(a.xyz, b.xyz));
-      }
-      vec3 dqRotate(vec4 q, vec3 v) {
-        return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
-      }
-      // adds one bone's rigid transform, as (real, dual) quaternions, to the blend
-      void dqAccumulate(mat4 bone, float weight, vec4 pivot, inout vec4 real, inout vec4 dual, inout float scale) {
-        if (weight <= 0.0) return;
-        float s = length(bone[0].xyz);
-        vec4 qr = dqQuatFromMat(mat3(bone[0].xyz / s, bone[1].xyz / s, bone[2].xyz / s));
-        vec4 qd = 0.5 * dqMul(vec4(bone[3].xyz, 0.0), qr);
-        if (dot(qr, pivot) < 0.0) { qr = -qr; qd = -qd; }     // same hemisphere as the first bone
-        real += weight * qr;
-        dual += weight * qd;
-        scale += weight * s;
-      }
-    `;
-
-    const DQ_BLEND = /* glsl */`
-      #ifdef USE_SKINNING
-        vec4 dqReal = vec4(0.0), dqDual = vec4(0.0);
-        float dqScale = 0.0;
-        vec4 dqPivot = dqQuatFromMat(mat3(normalize(boneMatX[0].xyz), normalize(boneMatX[1].xyz), normalize(boneMatX[2].xyz)));
-        dqAccumulate(boneMatX, skinWeight.x, dqPivot, dqReal, dqDual, dqScale);
-        dqAccumulate(boneMatY, skinWeight.y, dqPivot, dqReal, dqDual, dqScale);
-        dqAccumulate(boneMatZ, skinWeight.z, dqPivot, dqReal, dqDual, dqScale);
-        dqAccumulate(boneMatW, skinWeight.w, dqPivot, dqReal, dqDual, dqScale);
-        float dqLen = length(dqReal);
-        dqReal /= dqLen;
-        dqDual /= dqLen;
-        vec3 dqMove = 2.0 * dqMul(dqDual, vec4(-dqReal.xyz, dqReal.w)).xyz;
-        objectNormal = dqRotate(dqReal, objectNormal);
-      #endif
-    `;
-
-    const DQ_POSITION = /* glsl */`
-      #ifdef USE_SKINNING
-        vec3 dqLocal = (bindMatrix * vec4(transformed, 1.0)).xyz;
-        transformed = (bindMatrixInverse * vec4(dqScale * dqRotate(dqReal, dqLocal) + dqMove, 1.0)).xyz;
-      #endif
-    `;
-
-    function useDualQuaternionSkinning(material) {
-      material.onBeforeCompile = (shader) => {
-        shader.vertexShader = shader.vertexShader
-          .replace('void main() {', DQ_FUNCS + '\nvoid main() {')
-          .replace('#include <skinnormal_vertex>', DQ_BLEND)
-          .replace('#include <skinning_vertex>', DQ_POSITION);
-      };
+      const b1 = 1 - smooth(1.0, 2.2, arc);
+      const b4 = 0.85 * smooth(1.7, 3.3, arc);
+      const rest = Math.max(0, 1 - b1 - b4);
+      const toward2 = 1 - smooth(1.5, 2.8, arc);   // upper part of the rest goes to bone 2, lower to 3
+      return [[1, b1], [2, rest * toward2], [3, rest * (1 - toward2)], [4, b4]].filter(([, v]) => v > 1e-4);
     }
 
     // Body and calyx come as separate meshes in the file; they are merged into
@@ -443,21 +325,11 @@
         return new TessellateModifier(0.12, 8).modify(baked);
       });
 
-      // how far down the centre line the calyx reaches (tips of its lobes)
-      let calyxEnd = 0;
-      sources.forEach((source, k) => {
-        if (!/Hat/i.test(source.name)) return;
-        const p = pieces[k].attributes.position;
-        for (let i = 0; i < p.count; i++) calyxEnd = Math.max(calyxEnd, arcLength(p.getX(i), p.getY(i)));
-      });
-      const rigidUntil = (calyxEnd || BONE_ARCS[2]) + 0.05;
-      buildRenderChain(rigidUntil);
-
       // bind pose has to be taken with the rig at identity, the way the mesh is laid out
       const savedScale = rig.scale.clone();
       rig.scale.setScalar(1);
       rig.updateMatrixWorld(true);
-      const skeleton = new THREE.Skeleton([...bones, ...renderBones]);
+      const skeleton = new THREE.Skeleton(bones);
       rig.scale.copy(savedScale);
       rig.updateMatrixWorld(true);
 
@@ -486,7 +358,6 @@
         // the calyx shell and of the body show through as extra layers when it folds
         side: THREE.FrontSide,
       });
-      useDualQuaternionSkinning(material);
       const mesh = new THREE.SkinnedMesh(geo, material);
       mesh.bind(skeleton);
       mesh.frustumCulled = false;
@@ -589,14 +460,14 @@
     // collision probes along the centre line, in screen px
     const probes = PROBES.map(() => ({ x: 0, y: 0, vx: 0, vy: 0, r: 0, seen: false }));
     const _pt = new THREE.Vector3(), _edge = new THREE.Vector3(), _scr = { x: 0, y: 0 };
-    // the drawn centre line: grip, wiggle bone 1, every render joint, tip
-    const lineBones = [bones[0], bones[1], ...renderBones];
-    const joints = [...lineBones.map(() => new THREE.Vector3()), new THREE.Vector3()];
-    const jointArcs = [0, BONE_ARCS[1], ...renderArcs, TOTAL];
+    // the centre line as the bones draw it: every bone head, then the tip
+    const TIP_LEN = heads[heads.length - 1].distanceTo(tipHang);
+    const joints = [...bones.map(() => new THREE.Vector3()), new THREE.Vector3()];
+    const jointArcs = [...BONE_ARCS, TOTAL];
 
     function updateProbes(dt) {
-      lineBones.forEach((b, i) => joints[i].setFromMatrixPosition(b.matrixWorld));
-      renderBones[renderBones.length - 1].localToWorld(joints[lineBones.length].copy(renderTip));
+      bones.forEach((b, i) => joints[i].setFromMatrixPosition(b.matrixWorld));
+      bones[bones.length - 1].localToWorld(joints[bones.length].set(0, TIP_LEN, 0));
       // px per model unit at the eggplant's depth
       toScreen(joints[0], _scr);
       const x0 = _scr.x, y0 = _scr.y;
@@ -641,63 +512,6 @@
       finally { Date.now = realDateNow; }
     }
 
-    // Copies the bends of wiggle bones 2..4 onto the render chain before each
-    // draw, each one spread over the render joints around it. Only a curl so
-    // large it would fold the body onto itself is eased back (soft caps, no
-    // hard stop); ordinary swings pass through untouched, keeping the flow.
-    // wiggle recomputes its bones from the springs on every step, so nothing
-    // here feeds back into the physics.
-    const JOINT_KNEE = 1.0, JOINT_MAX = 1.6;      // rad, per physics joint
-    const CURL_KNEE = 1.8, CURL_MAX = 2.6;        // rad, all body joints together
-    // A crease appears where the bend's radius gets close to the body radius:
-    // the inner side is squeezed toward nothing and folds. Shares of
-    // neighbouring joints can stack up at one spot, so each render joint is
-    // also eased so the bend radius stays well above the local body radius
-    // (1.7x keeps the inner side visibly round).
-    const CREASE_MARGIN = 1.7;
-    const bodyRadius = (arc) => {
-      let i = 0;
-      while (i < PROBES.length - 2 && arc > PROBES[i + 1][0]) i++;
-      const [a0, r0] = PROBES[i], [a1, r1] = PROBES[i + 1];
-      return r0 + (r1 - r0) * clamp((arc - a0) / (a1 - a0), 0, 1);
-    };
-    const _rest = new THREE.Quaternion();
-    const _bend = new THREE.Quaternion();
-    const _part = new THREE.Quaternion();
-    const bendsInBone1 = [0, 1, 2].map(() => new THREE.Quaternion());
-    const softCap = (a, knee, max) => (a <= knee ? a : knee + (max - knee) * Math.tanh((a - knee) / (max - knee)));
-
-    function updateRenderChain() {
-      const found = [];
-      let curl = 0;
-      for (let j = 2; j < bones.length; j++) {
-        const q = bones[j].quaternion;
-        const angle = 2 * Math.acos(Math.min(1, Math.abs(q.w)));
-        const eased = softCap(angle, JOINT_KNEE, JOINT_MAX);
-        found.push({ q, angle, eased });
-        curl += eased;
-      }
-      const scale = curl > 1e-4 ? softCap(curl, CURL_KNEE, CURL_MAX) / curl : 1;
-      found.forEach(({ q, angle, eased }, i) => {
-        _bend.slerpQuaternions(_rest, q, angle > 1e-4 ? (eased * scale) / angle : 1);
-        // express the bend in bone 1's frame, which every render bone shares at rest
-        const r = restFromBone1[i];
-        bendsInBone1[i].copy(r).multiply(_bend).multiply(_part.copy(r).invert());
-      });
-      renderBones.forEach((bone, k) => {
-        const q = bone.quaternion.identity();
-        bendsInBone1.forEach((b, i) => {
-          if (shares[i][k] > 0) q.multiply(_part.slerpQuaternions(_rest, b, shares[i][k]));
-        });
-        const angle = 2 * Math.acos(Math.min(1, Math.abs(q.w)));
-        // the thin tip uses the thick body's radius too: curled tighter, it
-        // would fold back against the wider part above it
-        const most = RENDER_STEP / (Math.max(bodyRadius(renderArcs[k]), 1.0) * CREASE_MARGIN);
-        if (angle > 0.5 * most) q.slerpQuaternions(_rest, _part.copy(q), softCap(angle, 0.5 * most, most) / angle);
-      });
-      rig.updateMatrixWorld(true);
-    }
-
     let prev = performance.now();
     function frame(now) {
       simBehind += now - prev;
@@ -707,7 +521,6 @@
       let steps = 0;
       while (simBehind >= SIM_MS && steps < MAX_STEPS) { simStep(); simBehind -= SIM_MS; steps++; }
       if (steps === MAX_STEPS) simBehind = 0;
-      updateRenderChain();
 
       // the eggplant only knocks letters once someone is moving it
       updateProbes(dt);
