@@ -57,7 +57,8 @@
   <script type="importmap">
     { "imports": {
       "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+      "wiggle/spring": "https://cdn.jsdelivr.net/npm/wiggle@0.0.17/dist/WiggleSpring.mjs"
     } }
   </script>
 
@@ -65,6 +66,8 @@
     import * as THREE from 'three';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+    // Wiggle Bones for three.js (MIT) by Xavier (Jack), https://wiggle.three.tools/
+    import { WiggleBone } from 'wiggle/spring';
 
     const MODEL_URL = 'eggplant_emoji.glb';
     const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -254,10 +257,10 @@
       return arc;
     }
 
-    // Six bones down the centre line; many small bends read as one smooth curve.
-    // The first one carries the calyx and sits where the cursor holds it.
-    const BONE_ARCS = [0, 1.05, 1.65, 2.25, 2.85, 3.45];
-    const BLEND = 0.26;                           // half-width of each joint's blend zone
+    // Same layout as the 🍆.ws rig: a static root at the top of the calyx and
+    // four spring bones down the body (heads at these distances along the line).
+    const BONE_ARCS = [0, 0.58, 1.38, 2.25, 3.25];
+    const BLEND = 0.22;                           // half-width of each joint's blend zone
     // body radius along the centre line, used for hits (model units)
     const PROBES = [[0, 0.7], [0.6, 0.75], [1.2, 0.75], [1.8, 0.85], [2.4, 0.95], [3.0, 0.95], [3.6, 0.8], [TOTAL - 0.1, 0.45]];
 
@@ -270,13 +273,27 @@
 
     const heads = BONE_ARCS.map((a) => toHang(pointAt(a)));
     const tipHang = toHang(pointAt(TOTAL));
+    const TIP_LEN = heads[heads.length - 1].distanceTo(tipHang);
+
+    // wiggle expects each bone's +Y to run along the bone and its child to sit
+    // at (0, length, 0), the way Blender exports bones
+    const UP = new THREE.Vector3(0, 1, 0);
+    const boneDirs = heads.map((h, i) => (i + 1 < heads.length ? heads[i + 1] : tipHang).clone().sub(h).normalize());
+    const boneQuats = boneDirs.map((d) => new THREE.Quaternion().setFromUnitVectors(UP, d));
 
     const rig = new THREE.Group();                // follows the cursor
     scene.add(rig);
     const bones = heads.map(() => new THREE.Bone());
     bones.forEach((bone, i) => {
-      if (i === 0) { bone.position.copy(heads[0]); rig.add(bone); }
-      else { bone.position.copy(heads[i]).sub(heads[i - 1]); bones[i - 1].add(bone); }
+      if (i === 0) {
+        bone.position.copy(heads[0]);
+        bone.quaternion.copy(boneQuats[0]);
+        rig.add(bone);
+      } else {
+        bone.position.set(0, heads[i].distanceTo(heads[i - 1]), 0);
+        bone.quaternion.copy(boneQuats[i - 1]).invert().multiply(boneQuats[i]);
+        bones[i - 1].add(bone);
+      }
     });
     rig.updateMatrixWorld(true);
     const skeleton = new THREE.Skeleton(bones);
@@ -332,78 +349,14 @@
 
     rig.scale.setScalar(0.8);
 
-    // ---------- soft chain ----------
-    // Each bone owns a point at its tail. That point is a damped spring chasing
-    // where the tail would be if the eggplant were rigid; the bone then turns
-    // to aim at it (length kept). Softer springs further down make the motion
-    // travel along the body like a wave instead of moving as one block.
-    const SPRING_K = [190, 170, 150, 135, 120, 110];
-    const DAMPING_RATIO = 0.62;
-    const MAX_BEND = 0.62;                        // per joint (rad); six of them still allow a big swing
-    const chain = bones.map((bone, i) => {
-      const tailLocal = (i + 1 < bones.length ? heads[i + 1] : tipHang).clone().sub(heads[i]);
-      return {
-        bone,
-        tailLocal,
-        restDir: tailLocal.clone().normalize(),
-        point: new THREE.Vector3(),
-        vel: new THREE.Vector3(),
-        k: SPRING_K[i],
-        c: 2 * DAMPING_RATIO * Math.sqrt(SPRING_K[i]),
-      };
-    });
-
-    const _target = new THREE.Vector3();
-    const _head = new THREE.Vector3();
-    const _dir = new THREE.Vector3();
-    const _q = new THREE.Quaternion();
-    const _bend = new THREE.Quaternion();
-    const _identity = new THREE.Quaternion();
-
-    function seedChain() {
-      rig.updateMatrixWorld(true);
-      for (const link of chain) {
-        link.bone.quaternion.identity();
-        link.bone.updateMatrixWorld(true);
-        link.point.copy(link.tailLocal).applyMatrix4(link.bone.matrixWorld);
-        link.vel.set(0, 0, 0);
-      }
-    }
-
-    function stepChain(dt) {
-      const steps = 8, h = dt / steps;
-      for (const link of chain) {
-        const { bone } = link;
-        bone.quaternion.identity();
-        bone.updateMatrixWorld(true);
-        _target.copy(link.tailLocal).applyMatrix4(bone.matrixWorld);      // rigid tail
-        _head.setFromMatrixPosition(bone.matrixWorld);
-        const len = _target.distanceTo(_head);
-
-        for (let s = 0; s < steps; s++) {
-          // spring force, damping applied implicitly so it stays stable
-          link.vel.addScaledVector(_dir.subVectors(_target, link.point), link.k * h).divideScalar(1 + link.c * h);
-          link.point.addScaledVector(link.vel, h);
-        }
-
-        // aim the bone at the point (in its parent's space), bend limited per joint
-        _dir.subVectors(link.point, _head);
-        if (_dir.lengthSq() < 1e-8) _dir.subVectors(_target, _head);
-        bone.parent.getWorldQuaternion(_q).invert();
-        _dir.applyQuaternion(_q).normalize();
-        _bend.setFromUnitVectors(link.restDir, _dir);
-        const angle = 2 * Math.acos(clamp(_bend.w, -1, 1));
-        if (angle > MAX_BEND) _bend.slerpQuaternions(_identity, _bend, MAX_BEND / angle);
-        bone.quaternion.copy(_bend);
-        bone.updateMatrixWorld(true);
-
-        // keep the point on the bone's actual tail and drop the stretching motion
-        _target.copy(link.tailLocal).applyMatrix4(bone.matrixWorld);
-        _dir.subVectors(_target, _head);
-        link.point.copy(_target);
-        link.vel.addScaledVector(_dir, -link.vel.dot(_dir) / (len * len));
-      }
-    }
+    // spring settings per wiggle bone, as on 🍆.ws: the two upper ones bounce,
+    // the two lower ones are stiff but heavily damped so they trail like syrup
+    const SPRINGS = [
+      { stiffness: 700, damping: 25 },
+      { stiffness: 700, damping: 25 },
+      { stiffness: 6000, damping: 1600 },
+      { stiffness: 6000, damping: 1600 },
+    ];
 
     // ---------- pointer → point on a plane facing the camera ----------
     const ray = new THREE.Raycaster();
@@ -456,18 +409,13 @@
     // ---------- pose ----------
     // Until someone touches it the eggplant lies diagonally like the emoji.
     // Once held, it hangs from the cursor facing the camera, its bottom
-    // leaning a little away from the viewer. The root eases between poses.
-    const HANG_LEAN = 0.55;
-    const _goal = new THREE.Quaternion();
+    // leaning 20° away from the viewer.
+    const HANG_LEAN = 20 * Math.PI / 180;
 
-    function orientRig(dt) {
-      const from = _q.copy(rig.quaternion);
+    function orientRig() {
       rig.lookAt(camera.position);
       if (held) rig.rotateX(HANG_LEAN);
       else rig.rotateZ(EMOJI_TILT);
-      if (dt === undefined) return;
-      _goal.copy(rig.quaternion);
-      rig.quaternion.copy(from).slerp(_goal, Math.min(1, 6 * dt));
     }
 
     // ---------- load model, then run ----------
@@ -489,7 +437,9 @@
     planePoint(innerWidth / 2, innerHeight / 2, target);
     rig.position.add(target).sub(rig.localToWorld(bounds.getCenter(new THREE.Vector3())));
     target.copy(rig.position);
-    seedChain();
+    rig.updateMatrixWorld(true);
+    // the root stays static (moved by the rig); the rest become springs
+    const wiggles = bones.slice(1).map((bone, i) => new WiggleBone(bone, SPRINGS[i]));
 
     // ---------- loop ----------
     // collision probes along the centre line, in screen px
@@ -500,7 +450,7 @@
 
     function updateProbes(dt) {
       bones.forEach((b, i) => joints[i].setFromMatrixPosition(b.matrixWorld));
-      joints[bones.length].copy(chain[chain.length - 1].point);
+      bones[bones.length - 1].localToWorld(joints[bones.length].set(0, TIP_LEN, 0));
       // px per model unit at the eggplant's depth
       toScreen(joints[0], _scr);
       const x0 = _scr.x, y0 = _scr.y;
@@ -528,10 +478,10 @@
       const dt = Math.min((now - prev) / 1000, 1 / 20);
       prev = now;
 
-      rig.position.lerp(target, Math.min(16 * dt, 1));
-      orientRig(dt);
+      rig.position.lerp(target, Math.min(20 * dt, 1));
+      orientRig();
       rig.updateMatrixWorld(true);
-      stepChain(dt);
+      wiggles.forEach((w) => w.update());
 
       // the eggplant only knocks letters once someone is moving it
       updateProbes(dt);
