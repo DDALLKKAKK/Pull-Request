@@ -298,13 +298,19 @@
     rig.updateMatrixWorld(true);
     const skeleton = new THREE.Skeleton(bones);
 
-    // Weights depend only on how far down the centre line a point sits, so the
-    // stem, the calyx and the body under it get exactly the same deformation
-    // wherever they overlap and move as one object. The static root only
-    // carries the grip; everything from the stem down rides the spring bones,
-    // each joint blending over the stretch between neighbouring bone middles.
-    function boneWeights(arc) {
-      const past = [1, 2, 3].map((j) => smooth(BONE_MIDS[j], BONE_MIDS[j + 1], arc));
+    // Weights depend only on how far down the centre line a point sits. The
+    // static root only carries the grip; everything from the stem down rides
+    // the spring bones. Down to just past the calyx's lowest point the weights
+    // are constant, so the calyx and the body under it get one and the same
+    // transform: if bending began inside the calyx, the shell and the body
+    // beneath (a hair apart on the line) would turn by slightly different
+    // amounts and a thin sliver of body would show at the rim. Below that,
+    // each joint blends over a wide stretch so the bend stays smooth.
+    function boneWeights(arc, rigidUntil) {
+      const z1 = Math.max(rigidUntil + 0.45, BONE_MIDS[2]);
+      const z2 = Math.max(z1 + 0.45, BONE_MIDS[3]);
+      const z3 = Math.max(z2 + 0.45, BONE_MIDS[4]);
+      const past = [smooth(rigidUntil, z1, arc), smooth(z1, z2, arc), smooth(z2, z3, arc)];
       return [0, 1 - past[0], past[0] - past[1], past[1] - past[2], past[2]].map((v) => Math.max(0, v));
     }
 
@@ -397,12 +403,21 @@
         return new TessellateModifier(0.12, 8).modify(baked);
       });
 
+      // how far down the centre line the calyx reaches (tips of its lobes)
+      let calyxEnd = 0;
+      sources.forEach((source, k) => {
+        if (!/Hat/i.test(source.name)) return;
+        const p = pieces[k].attributes.position;
+        for (let i = 0; i < p.count; i++) calyxEnd = Math.max(calyxEnd, arcLength(p.getX(i), p.getY(i)));
+      });
+      const rigidUntil = (calyxEnd || BONE_ARCS[2]) + 0.05;
+
       const geo = mergeGeometries(pieces);
       const pos = geo.attributes.position;
       const idx = new Uint16Array(pos.count * 4);
       const wgt = new Float32Array(pos.count * 4);
       for (let i = 0; i < pos.count; i++) {
-        const w = boneWeights(arcLength(pos.getX(i), pos.getY(i)));
+        const w = boneWeights(arcLength(pos.getX(i), pos.getY(i)), rigidUntil);
         // keep the four strongest influences
         const top = w.map((v, b) => [v, b]).sort((a, b) => b[0] - a[0]).slice(0, 4);
         const sum = top.reduce((a, [v]) => a + v, 0) || 1;
