@@ -49,9 +49,88 @@
       letter-spacing: -0.02em;
     }
     .sc-l { display: inline-block; white-space: pre; will-change: transform; }
+
+    /* launch screen: the emoji fades in and swings into place, then the name unfolds */
+    .launch {
+      --l-bg: #23004a; --l-fg: #ffffff; --l-brand: #cc00ff; --l-track: #3b0064; --l-glow: rgba(204, 0, 255, 0.16);
+      position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; overflow: hidden;
+      background: var(--l-bg); transition: opacity 0.42s ease, visibility 0.42s ease;
+    }
+    .launch::before {
+      content: ''; position: absolute; width: min(90vw, 780px); height: min(90vw, 780px); border-radius: 50%;
+      background: radial-gradient(circle, var(--l-glow), transparent 66%); opacity: 0; animation: l-fade 1.5s ease 0.2s forwards; pointer-events: none;
+    }
+    .launch.is-leaving { opacity: 0; visibility: hidden; pointer-events: none; }
+    .l-stage { position: relative; display: flex; flex-direction: column; align-items: center; transform: translateY(-3vh); }
+    .l-word {
+      display: flex; align-items: center; justify-content: center; white-space: nowrap; color: var(--l-fg);
+      font-family: 'Noto Sans KR', sans-serif;
+      font-size: clamp(30px, 6vw, 56px); font-weight: 800; line-height: 1.2; letter-spacing: -0.04em;
+    }
+    .l-logo { display: block; font-size: 1.25em; line-height: 1; letter-spacing: 0; }
+    .l-logo span {
+      display: block; opacity: 0; transform: translate(-15%, -11%) rotate(-14deg) scale(0.92);
+      animation: l-cut 1.15s cubic-bezier(0.22, 1, 0.36, 1) 0.08s forwards;
+    }
+    .l-name { display: block; width: 0; overflow: hidden; animation: l-expand 1s cubic-bezier(0.22, 1, 0.36, 1) 0.62s forwards; }
+    .l-name span { display: block; width: max-content; padding-left: 0.28em; opacity: 0; transform: translateX(-24px); animation: l-name 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.68s forwards; }
+    .l-line { width: 58px; height: 2px; margin-top: 28px; border-radius: 2px; overflow: hidden; background: var(--l-track); opacity: 0; animation: l-fade 0.5s ease 1.05s forwards; }
+    .l-line::after { content: ''; display: block; width: 100%; height: 100%; background: var(--l-brand); animation: l-line 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
+    .l-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    @keyframes l-cut {
+      0% { opacity: 0; filter: blur(5px); }
+      30% { opacity: 1; filter: blur(0); transform: translate(-15%, -11%) rotate(-14deg) scale(0.92); }
+      100% { opacity: 1; filter: blur(0); transform: none; }
+    }
+    @keyframes l-expand { to { width: var(--l-name-w, 6em); } }
+    @keyframes l-name { to { opacity: 1; transform: none; } }
+    @keyframes l-fade { to { opacity: 1; } }
+    @keyframes l-line { 0% { transform: translateX(-100%) scaleX(0.55); } 55%, 100% { transform: translateX(100%) scaleX(0.55); } }
+    @media (prefers-reduced-motion: reduce) {
+      .launch { transition: opacity 0.15s ease; }
+      .launch::before, .l-logo span, .l-name, .l-name span, .l-line, .l-line::after { animation: none !important; opacity: 1; transform: none; filter: none; }
+      .l-name { width: var(--l-name-w, 6em); }
+    }
   </style>
 </head>
 <body>
+  <div id="launch" class="launch" role="status" aria-label="About Github; 불러오는 중">
+    <div class="l-stage" aria-hidden="true">
+      <div class="l-word">
+        <span class="l-logo"><span>🍆</span></span>
+        <span class="l-name"><span>About Github;</span></span>
+      </div>
+      <div class="l-line"></div>
+    </div>
+    <span class="l-sr">About Github;를 불러오고 있어요.</span>
+  </div>
+  <script>
+    (() => {
+      const screen = document.getElementById('launch');
+      const began = performance.now();
+      const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const name = screen.querySelector('.l-name span');
+      const setWidth = () => screen.style.setProperty('--l-name-w', `${name.getBoundingClientRect().width / parseFloat(getComputedStyle(name).fontSize)}em`);
+      setWidth();
+      document.fonts?.ready.then(setWidth);
+      let ending = false;
+      // called once the first 3D frame is drawn; the intro stays up for at least 2 s
+      window.finishLaunch = () => {
+        if (ending) return;
+        ending = true;
+        setTimeout(() => {
+          screen.classList.add('is-leaving');
+          setTimeout(() => {
+            screen.remove();
+            delete window.finishLaunch;
+          }, reduced ? 180 : 460);
+        }, Math.max(0, (reduced ? 150 : 2000) - (performance.now() - began)));
+      };
+      // don't get stuck on the launch screen if the model is slow or fails to load
+      setTimeout(() => window.finishLaunch?.(), 6500);
+    })();
+  </script>
+
   <div id="backdrop"><p data-scatter>예시 텍스트</p></div>
 
   <script type="importmap">
@@ -531,6 +610,8 @@
       requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
+    // runs right after the first frame has rendered
+    requestAnimationFrame(() => window.finishLaunch?.());
   </script>
 </body>
 </html>
