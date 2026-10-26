@@ -576,6 +576,27 @@
       finally { Date.now = realDateNow; }
     }
 
+    // On a fast sideways swing the joints inside the body can each bend so far
+    // that the lower body folds back over the upper body, and the overlap reads
+    // as stacked layers. Before drawing, each body joint's bend is eased into a
+    // ceiling (tanh: small bends untouched, large ones flattened out, no hard
+    // stop). The first spring bone swings the whole eggplant and is left free.
+    // wiggle recomputes every bone from its springs on the next step, so this
+    // only shapes what is drawn and never feeds back into the physics.
+    const FOLD_MAX = 0.6;                         // rad, per body joint
+    const _rest = new THREE.Quaternion();
+
+    function limitFolds() {
+      for (let i = 2; i < bones.length; i++) {
+        const q = bones[i].quaternion;
+        const angle = 2 * Math.acos(Math.min(1, Math.abs(q.w)));
+        if (angle < 1e-4) continue;
+        const eased = FOLD_MAX * Math.tanh(angle / FOLD_MAX);
+        q.slerpQuaternions(_rest, q.clone(), eased / angle);
+      }
+      rig.updateMatrixWorld(true);
+    }
+
     let prev = performance.now();
     function frame(now) {
       simBehind += now - prev;
@@ -585,6 +606,7 @@
       let steps = 0;
       while (simBehind >= SIM_MS && steps < MAX_STEPS) { simStep(); simBehind -= SIM_MS; steps++; }
       if (steps === MAX_STEPS) simBehind = 0;
+      limitFolds();
 
       // the eggplant only knocks letters once someone is moving it
       updateProbes(dt);
