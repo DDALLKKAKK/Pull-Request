@@ -1,57 +1,58 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ko">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#610085">
   <title>🍆</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍆</text></svg>">
+  <!--
+    3D model: "Eggplant Emoji 🍆" by animatezach
+    https://sketchfab.com/3d-models/eggplant-emoji-531e2c549ae54b9189b460c2ff7e0e44
+    Licensed under CC BY-NC-ND 4.0 (http://creativecommons.org/licenses/by-nc-nd/4.0/)
+    The .glb file is shipped unmodified; it is only posed at runtime.
+  -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@800&display=swap" rel="stylesheet">
   <style>
     * { -webkit-user-select: none; user-select: none; }
     html, body { margin: 0; height: 100%; overflow: hidden; }
-    body { background: #9000c4; touch-action: none; }
-    canvas { display: block; }
-
-    #more-info {
-      position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
-      z-index: 100; padding: 10px 20px;
-      color: #fff; font: 15px Poppins, sans-serif; text-decoration: underline;
-      background: none; border: 0; outline: none; cursor: pointer;
-      opacity: .7; transition: opacity 4s;
-      -webkit-tap-highlight-color: transparent;
+    body {
+      touch-action: none;
+      background-color: #23004a;
+      /* radial glow: inner #cc00ff → outer #23004a, eased like 1-(1-d)² */
+      background-image: radial-gradient(circle 71.43vw at 50% 50%,
+        rgb(204, 0, 255) 0%, rgb(164, 0, 213) 12.5%, rgb(130, 0, 176) 25%,
+        rgb(101, 0, 145) 37.5%, rgb(77, 0, 119) 50%, rgb(59, 0, 100) 62.5%,
+        rgb(46, 0, 85) 75%, rgb(35, 0, 74) 100%);
     }
-    #more-info:hover { opacity: 1; }
-
-    #popup {
-      position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      z-index: 200; padding: 25px; border-radius: 20px;
-      background: rgba(0, 0, 0, .7); color: #fff; text-align: center;
-      font: 15px Poppins, sans-serif;
-      visibility: hidden; opacity: 0;
-      transition: opacity .5s, visibility 0s .5s;
+    @media (max-aspect-ratio: 2/3) {
+      body {
+        background-image: radial-gradient(circle 111.1vw at 50% 50%,
+          rgb(204, 0, 255) 0%, rgb(164, 0, 213) 12.5%, rgb(130, 0, 176) 25%,
+          rgb(101, 0, 145) 37.5%, rgb(77, 0, 119) 50%, rgb(59, 0, 100) 62.5%,
+          rgb(46, 0, 85) 75%, rgb(35, 0, 74) 100%);
+      }
     }
-    #popup.show { visibility: visible; opacity: .8; transition: opacity .5s; }
-    #popup p { margin: 0; }
-    #popup p + p { margin-top: 1.2em; }
-    #popup a, #popup a:visited { color: #fff; }
+    canvas { position: fixed; inset: 0; z-index: 1; display: block; }
 
-    #fallback {
-      position: absolute; inset: 0; display: none;
-      align-items: center; justify-content: center;
-      font-size: 160px;
+    /* background text, sits between the gradient and the 3D canvas */
+    #backdrop {
+      position: fixed; inset: 0; z-index: 0;
+      display: flex; align-items: center; justify-content: center;
+      pointer-events: none;
     }
+    #backdrop p {
+      margin: 0; padding: 0 24px;
+      color: #fff; text-align: center;
+      font: 800 clamp(34px, 6.5vw, 104px)/1.1 'Noto Sans KR', sans-serif;
+      letter-spacing: -0.02em;
+    }
+    .sc-l { display: inline-block; white-space: pre; will-change: transform; }
   </style>
 </head>
 <body>
-  <button id="more-info" type="button">???</button>
-  <div id="popup">
-    <p>original <a href="https://xn--gi8h42h.ws/" target="_blank" rel="noopener">🍆.ws</a> by <a href="https://maxvanleeuwen.com" target="_blank" rel="noopener">Max van Leeuwen</a></p>
-    <p>eggplant modeled in code with <a href="https://threejs.org/" target="_blank" rel="noopener">three.js</a></p>
-  </div>
-  <div id="fallback">🍆</div>
+  <div id="backdrop"><p data-scatter>예시 텍스트</p></div>
 
   <script type="importmap">
     { "imports": {
@@ -62,16 +63,16 @@
 
   <script type="module">
     import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
+    const MODEL_URL = 'eggplant_emoji.glb';
+    const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+    const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+
     // ---------- renderer / camera / scene ----------
-    let renderer;
-    try {
-      renderer = new THREE.WebGLRenderer({ antialias: true });
-    } catch (e) {
-      document.getElementById('fallback').style.display = 'flex';
-      throw e;
-    }
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setClearColor(0x000000, 0);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.2;
     document.body.appendChild(renderer.domElement);
@@ -84,229 +85,271 @@
     const scene = new THREE.Scene();
     const pmrem = new THREE.PMREMGenerator(renderer);
     scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environmentIntensity = 0.1;
 
-    // ---------- radial gradient background ----------
-    const bgUniforms = {
-      inner: { value: new THREE.Color('#cc00ff') },
-      outer: { value: new THREE.Color('#23004a') },
-      aspect: { value: innerHeight / innerWidth },
-    };
-    const bg = new THREE.Mesh(
-      new THREE.PlaneGeometry(2, 2),
-      new THREE.ShaderMaterial({
-        uniforms: bgUniforms,
-        depthWrite: false,
-        depthTest: false,
-        vertexShader: /* glsl */`
-          varying vec2 vUv;
-          void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
-        fragmentShader: /* glsl */`
-          uniform vec3 inner;
-          uniform vec3 outer;
-          uniform float aspect;
-          varying vec2 vUv;
-          void main() {
-            // glow sized to the short side: wider on landscape, tighter on portrait
-            float k = aspect < 1.5 ? 1.4 : 0.9;
-            vec2 p = (vUv - 0.5) * vec2(1.0, aspect) * k;
-            float d = clamp(length(p), 0.0, 1.0);
-            float f = 1.0 - (1.0 - d) * (1.0 - d);
-            gl_FragColor = vec4(mix(inner, outer, f), 1.0);
-          }`,
-      })
-    );
-    bg.frustumCulled = false;
-    bg.renderOrder = -1;
-    scene.add(bg);
-
-    // ---------- lights ----------
-    const rimCyan = new THREE.PointLight('#00fff2', 6.5);
+    // lighting as on 🍆.ws: cyan and magenta rims from behind-left / behind-right
+    // over a strong white ambient
+    const rimCyan = new THREE.DirectionalLight('#00fff2', 6.5);
     rimCyan.position.set(-1, 0, -1.5);
-    const rimPink = new THREE.PointLight('#ff00f7', 4.5);
+    const rimPink = new THREE.DirectionalLight('#ff00f7', 4.5);
     rimPink.position.set(1, 0, -2.5);
-    const key = new THREE.DirectionalLight('#ffffff', 0.75);
-    key.position.set(-3, 6, 8);
-    scene.add(rimCyan, rimPink, key, new THREE.AmbientLight('#ffffff', 0.35));
+    scene.add(rimCyan, rimPink, new THREE.AmbientLight('#ffffff', 3.4));
 
-    // ---------- eggplant shape (procedural) ----------
-    // Rest pose hangs from the origin: stem points up (+y), body runs down to
-    // y = -BODY_LEN and arcs sideways like the emoji.
-    const BODY_LEN = 3.0;
-    const curveX = (y) => 0.12 * y * y;
+    // ---------- background text: split into letters ----------
+    // Each letter is a little rigid body. The eggplant hands over its own
+    // velocity where it touches (plus a kick on first contact) and the
+    // off-centre contact makes it spin. Once untouched for a moment, a
+    // spring with slight overshoot pulls it home.
+    const KICK = 320;            // extra push on first contact (px/s)
+    const TRANSFER = 1.7;        // share of the eggplant's approach speed given to the letter
+    const FRICTION = 0.35;       // share of its sliding speed dragged along
+    const SPIN = 1.6;            // torque gain
+    const MAX_V = 3200;          // px/s
+    const MAX_W = 1400;          // deg/s
+    const POP_SCALE = 1.18;      // grows a bit while knocked about
+    const RETURN_DUR = 1.8;      // felt return time (s)
+    const FLY_DRAG = 1.6;        // damping while knocked; sets how far letters travel
 
-    function bodyRadius(s) {
-      const top = Math.sqrt(Math.min(1, (s + 0.02) / 0.1));       // rounded shoulder under the calyx
-      const tip = Math.sqrt(Math.max(0, 1 - Math.pow(s, 3.2)));  // rounded bottom
-      return (0.4 + 0.6 * Math.pow(s, 0.9)) * top * tip;
+    const backdrop = document.getElementById('backdrop');
+    const letters = [];
+    backdrop.querySelectorAll('[data-scatter]').forEach((host) => {
+      const nodes = [];
+      const walk = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+      while (walk.nextNode()) nodes.push(walk.currentNode);
+      for (const node of nodes) {
+        const frag = document.createDocumentFragment();
+        for (const ch of node.nodeValue) {
+          const span = document.createElement('span');
+          span.className = 'sc-l';
+          span.textContent = ch;
+          frag.appendChild(span);
+          if (ch.trim()) letters.push({ el: span });   // spaces stay put
+        }
+        node.parentNode.replaceChild(frag, node);
+      }
+    });
+
+    // return spring, ζ = 0.45 so it overshoots a touch before settling
+    const W0 = 4 / (0.45 * RETURN_DUR);
+    const LK = W0 * W0, LC = 2 * 0.45 * W0;
+
+    for (const L of letters) {
+      L.x = L.y = L.r = L.vx = L.vy = L.vr = 0;
+      L.s = 1; L.hit = -1e9; L.touching = false; L.dirty = false;
     }
 
-    function bodyGeometry() {
-      const pts = [];
-      for (let i = 0; i <= 80; i++) {
-        const s = i / 80;
-        pts.push(new THREE.Vector2(Math.max(bodyRadius(s), 0.0001), 0.05 - s * (BODY_LEN + 0.05)));
+    // offsetLeft/Top ignore transforms, so this gives rest positions even mid-flight
+    function measureLetters() {
+      for (const L of letters) {
+        let x = 0, y = 0, n = L.el;
+        while (n && n !== backdrop) { x += n.offsetLeft; y += n.offsetTop; n = n.offsetParent; }
+        L.hw = L.el.offsetWidth / 2;
+        L.hh = L.el.offsetHeight / 2;
+        L.cx = x + L.hw;
+        L.cy = y + L.hh;
+        L.inertia = 3 / (L.hw * L.hw + L.hh * L.hh);   // 1/I for a box, per unit mass
       }
-      const geo = new THREE.LatheGeometry(pts.reverse(), 72);
-      const pos = geo.attributes.position;
-      for (let i = 0; i < pos.count; i++) pos.setX(i, pos.getX(i) + curveX(pos.getY(i)));
-      geo.computeVertexNormals();
-      return geo;
+    }
+    measureLetters();
+    if (document.fonts) document.fonts.ready.then(measureLetters);
+
+    function stepLetters(dt, t) {
+      const steps = 3, h = dt / steps;
+      for (const L of letters) {
+        // 0 right after a touch → 1 once it has been left alone; blends drift into return
+        const home = smooth(0.25, 0.75, t - L.hit);
+        const k = LK * home, c = LC * home + FLY_DRAG * (1 - home);
+        for (let i = 0; i < steps; i++) {
+          L.vx += (-k * L.x - c * L.vx) * h;
+          L.vy += (-k * L.y - c * L.vy) * h;
+          L.vr += (-k * L.r - c * L.vr) * h;
+          L.x += L.vx * h; L.y += L.vy * h; L.r += L.vr * h;
+        }
+        L.s += (1 + (POP_SCALE - 1) * (1 - home) - L.s) * Math.min(1, 10 * dt);
+
+        const moved = Math.abs(L.x) > 0.05 || Math.abs(L.y) > 0.05
+                   || Math.abs(L.r) > 0.05 || Math.abs(L.s - 1) > 0.002;
+        if (!moved && !L.dirty) continue;
+        L.el.style.transform = moved
+          ? `translate3d(${L.x.toFixed(2)}px, ${L.y.toFixed(2)}px, 0) rotate(${L.r.toFixed(2)}deg) scale(${L.s.toFixed(3)})`
+          : '';
+        L.dirty = moved;
+      }
     }
 
-    function calyxGeometry() {
-      const pts = [];
-      for (let i = 0; i <= 24; i++) {
-        const s = i / 24;
-        pts.push(new THREE.Vector2(0.14 + 0.4 * Math.sin(s * Math.PI / 2), 0.14 - 0.36 * s * s));
+    // The eggplant is long, so it is tested as a row of circles along its
+    // centre line. A letter only gets pushed while that part is moving into
+    // it faster than the letter already moves away, so contact never blows up
+    // and a resting eggplant lets letters settle back.
+    function collide(probes, t) {
+      for (const L of letters) {
+        const px = L.cx + L.x, py = L.cy + L.y;
+        let best = null, bestGap = Infinity, qx = 0, qy = 0;
+        for (const p of probes) {
+          const nx = clamp(p.x, px - L.hw, px + L.hw);
+          const ny = clamp(p.y, py - L.hh, py + L.hh);
+          const gap = Math.hypot(p.x - nx, p.y - ny) - p.r;
+          if (gap < bestGap) { bestGap = gap; best = p; qx = nx; qy = ny; }
+        }
+        if (bestGap > 0) { L.touching = false; continue; }
+
+        let nx = px - best.x, ny = py - best.y;
+        let nl = Math.hypot(nx, ny);
+        if (nl < 1e-3) { nx = best.vx; ny = best.vy; nl = Math.hypot(nx, ny) || 1; }
+        nx /= nl; ny /= nl;
+
+        const rvx = best.vx - L.vx, rvy = best.vy - L.vy;
+        const vn = rvx * nx + rvy * ny;
+        let dvx = 0, dvy = 0;
+        if (!L.touching) { dvx += nx * KICK; dvy += ny * KICK; }
+        if (vn > 0) {
+          dvx += nx * vn * TRANSFER + (rvx - nx * vn) * FRICTION;
+          dvy += ny * vn * TRANSFER + (rvy - ny * vn) * FRICTION;
+        }
+        L.touching = true;
+        if (!dvx && !dvy) continue;
+
+        L.vx += dvx; L.vy += dvy;
+        const sp = Math.hypot(L.vx, L.vy);
+        if (sp > MAX_V) { L.vx *= MAX_V / sp; L.vy *= MAX_V / sp; }
+        // spin from the off-centre contact point (screen y points down, so + is clockwise)
+        const rx = qx - px, ry = qy - py;
+        L.vr = clamp(L.vr + (rx * dvy - ry * dvx) * L.inertia * (180 / Math.PI) * SPIN, -MAX_W, MAX_W);
+        L.hit = t;
       }
-      const geo = new THREE.LatheGeometry(pts, 120);
-      const pos = geo.attributes.position;
-      const LOBES = 5;
-      for (let i = 0; i < pos.count; i++) {
-        const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-        const s = (0.14 - y) / 0.36;                       // 0 at the top ring, 1 at the rim
-        const a = Math.atan2(z, x);
-        const lobe = Math.pow(0.5 + 0.5 * Math.cos(LOBES * a + 0.6), 2.5);
-        const drape = s * s * lobe;
-        const r = Math.hypot(x, z) * (1 + 0.1 * drape);
-        pos.setXYZ(i, Math.cos(a) * r + curveX(y), y - 0.42 * drape, Math.sin(a) * r);
-      }
-      geo.computeVertexNormals();
-      return geo;
     }
 
-    function stemGeometry() {
-      const path = new THREE.CatmullRomCurve3([
-        new THREE.Vector3(0, 0.05, 0),
-        new THREE.Vector3(-0.01, 0.25, 0),
-        new THREE.Vector3(-0.06, 0.42, 0),
-        new THREE.Vector3(-0.16, 0.52, 0),
-      ]);
-      const RADIAL = 16, TUBULAR = 24, R = 0.1;
-      const geo = new THREE.TubeGeometry(path, TUBULAR, R, RADIAL, false);
-      const pos = geo.attributes.position;
-      // taper slightly toward the end of the stem
-      for (let i = 0; i < pos.count; i++) {
-        const u = Math.floor(i / (RADIAL + 1)) / TUBULAR;
-        const c = path.getPointAt(u);
-        const k = 1 - 0.35 * u;
-        pos.setXYZ(i, c.x + (pos.getX(i) - c.x) * k, c.y + (pos.getY(i) - c.y) * k, c.z + (pos.getZ(i) - c.z) * k);
+    // ---------- eggplant rig ----------
+    // Centre line of the model, picked from its vertices (model units, the
+    // emoji's own diagonal pose): calyx → upper body → lower body → tip.
+    const CENTER_LINE = [
+      new THREE.Vector2(-1.2, 2.0),
+      new THREE.Vector2(-0.5, 0.6),
+      new THREE.Vector2(0.35, -0.35),
+      new THREE.Vector2(1.5, -1.15),
+    ];
+    const segLen = CENTER_LINE.slice(1).map((p, i) => p.distanceTo(CENTER_LINE[i]));
+    const TOTAL = segLen.reduce((a, b) => a + b, 0);
+
+    function pointAt(arc) {
+      for (let i = 0; i < segLen.length; i++) {
+        if (arc <= segLen[i] || i === segLen.length - 1) {
+          return CENTER_LINE[i].clone().lerp(CENTER_LINE[i + 1], clamp(arc / segLen[i], 0, 1));
+        }
+        arc -= segLen[i];
       }
-      const cap = new THREE.SphereGeometry(R * 0.65, 16, 12);
-      const end = path.getPointAt(1);
-      cap.translate(end.x, end.y, end.z);
-      const merged = mergeIndexed([geo, cap]);
-      merged.computeVertexNormals();
-      return merged;
     }
 
-    // minimal merge for indexed geometries with position/normal/uv
-    function mergeIndexed(geos) {
-      const position = [], uv = [], index = [];
-      let offset = 0;
-      for (const g of geos) {
-        position.push(...g.attributes.position.array);
-        uv.push(...g.attributes.uv.array);
-        for (const i of g.index.array) index.push(i + offset);
-        offset += g.attributes.position.count;
+    // arc length of the closest point on the centre line
+    function arcLength(x, y) {
+      let best = Infinity, arc = 0, acc = 0;
+      for (let i = 0; i < segLen.length; i++) {
+        const a = CENTER_LINE[i], b = CENTER_LINE[i + 1];
+        const abx = b.x - a.x, aby = b.y - a.y;
+        const u = clamp(((x - a.x) * abx + (y - a.y) * aby) / (segLen[i] * segLen[i]), 0, 1);
+        const d = Math.hypot(a.x + abx * u - x, a.y + aby * u - y);
+        if (d < best) { best = d; arc = acc + u * segLen[i]; }
+        acc += segLen[i];
       }
-      const out = new THREE.BufferGeometry();
-      out.setAttribute('position', new THREE.Float32BufferAttribute(position, 3));
-      out.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-      out.setIndex(index);
-      return out;
+      return arc;
     }
 
-    // ---------- rig ----------
-    // A short chain of bones runs down the eggplant. The first one sits at the
-    // top, right where the cursor holds it; the others hang below it.
-    const JOINT_Y = [0.1, -1.15, -2.1];          // bone heads, top → bottom
-    const jointAt = (y) => new THREE.Vector3(curveX(y), y, 0);
-    const TIP = jointAt(-BODY_LEN);
+    // Six bones down the centre line; many small bends read as one smooth curve.
+    // The first one carries the calyx and sits where the cursor holds it.
+    const BONE_ARCS = [0, 1.05, 1.65, 2.25, 2.85, 3.45];
+    const BLEND = 0.26;                           // half-width of each joint's blend zone
+    // body radius along the centre line, used for hits (model units)
+    const PROBES = [[0, 0.7], [0.6, 0.75], [1.2, 0.75], [1.8, 0.85], [2.4, 0.95], [3.0, 0.95], [3.6, 0.8], [TOTAL - 0.1, 0.45]];
 
-    const rig = new THREE.Group();               // follows the cursor
+    // Rotate so the first segment points straight down: that is the hanging
+    // pose. Rotating back by the same angle gives the emoji pose.
+    const first = CENTER_LINE[1].clone().sub(CENTER_LINE[0]);
+    const EMOJI_TILT = Math.atan2(first.y, first.x) + Math.PI / 2;
+    const toHang = (v) => new THREE.Vector3(v.x - CENTER_LINE[0].x, v.y - CENTER_LINE[0].y, 0)
+      .applyAxisAngle(new THREE.Vector3(0, 0, 1), -EMOJI_TILT);
+
+    const heads = BONE_ARCS.map((a) => toHang(pointAt(a)));
+    const tipHang = toHang(pointAt(TOTAL));
+
+    const rig = new THREE.Group();                // follows the cursor
     scene.add(rig);
-    const bones = JOINT_Y.map(() => new THREE.Bone());
+    const bones = heads.map(() => new THREE.Bone());
     bones.forEach((bone, i) => {
-      const head = jointAt(JOINT_Y[i]);
-      if (i === 0) { bone.position.copy(head); rig.add(bone); }
-      else { bone.position.copy(head).sub(jointAt(JOINT_Y[i - 1])); bones[i - 1].add(bone); }
+      if (i === 0) { bone.position.copy(heads[0]); rig.add(bone); }
+      else { bone.position.copy(heads[i]).sub(heads[i - 1]); bones[i - 1].add(bone); }
     });
     rig.updateMatrixWorld(true);
     const skeleton = new THREE.Skeleton(bones);
 
-    // Smoothly hand vertices from one bone to the next around each joint.
-    const BLEND = [[-0.85, -1.45], [-1.85, -2.35]];
-    const smooth = (a, b, x) => { const t = Math.min(Math.max((x - a) / (b - a), 0), 1); return t * t * (3 - 2 * t); };
+    function boneWeights(arc) {
+      // past[j]: how far this vertex is past joint j (0 → 1 across its blend zone)
+      const w = [];
+      let prevPast = 1;
+      for (let j = 0; j < BONE_ARCS.length; j++) {
+        const past = j + 1 < BONE_ARCS.length ? smooth(BONE_ARCS[j + 1] - BLEND, BONE_ARCS[j + 1] + BLEND, arc) : 0;
+        w.push(Math.max(0, prevPast - past));
+        prevPast = past;
+      }
+      return w;
+    }
 
-    function skin(geo) {
+    function rigMesh(source) {
+      const geo = source.geometry.clone();
+      // bake the file's node transforms, then undo its overall 0.01 scale
+      geo.applyMatrix4(source.matrixWorld);
+      const s = 1 / source.matrixWorld.getMaxScaleOnAxis();
+      geo.scale(s, s, s);
+
       const pos = geo.attributes.position;
       const idx = new Uint16Array(pos.count * 4);
       const wgt = new Float32Array(pos.count * 4);
       for (let i = 0; i < pos.count; i++) {
-        const y = pos.getY(i);
-        const past1 = smooth(BLEND[0][0], BLEND[0][1], y);   // 0 above the second joint, 1 below
-        const past2 = smooth(BLEND[1][0], BLEND[1][1], y);   // same for the third joint
-        const w0 = 1 - past1, w1 = Math.max(0, past1 - past2), w2 = past2;
-        idx.set([0, 1, 2, 0], i * 4);
-        wgt.set([w0, w1, w2, 0], i * 4);
+        const w = boneWeights(arcLength(pos.getX(i), pos.getY(i)));
+        // keep the four strongest influences
+        const top = w.map((v, b) => [v, b]).sort((a, b) => b[0] - a[0]).slice(0, 4);
+        const sum = top.reduce((a, [v]) => a + v, 0) || 1;
+        top.forEach(([v, b], k) => { idx[i * 4 + k] = b; wgt[i * 4 + k] = v / sum; });
       }
       geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(idx, 4));
       geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(wgt, 4));
-      return geo;
-    }
 
-    function skinned(geo, material) {
-      const mesh = new THREE.SkinnedMesh(skin(geo), material);
+      geo.translate(-CENTER_LINE[0].x, -CENTER_LINE[0].y, 0);
+      geo.rotateZ(-EMOJI_TILT);
+
+      // keep the model's colour texture, give it the glossy metallic finish of 🍆.ws
+      const material = new THREE.MeshPhysicalMaterial({
+        map: source.material.map,
+        metalness: 0.92,
+        roughness: 0.5,
+        side: THREE.DoubleSide,
+      });
+      const mesh = new THREE.SkinnedMesh(geo, material);
       mesh.bind(skeleton);
       mesh.frustumCulled = false;
       scene.add(mesh);
       return mesh;
     }
 
-    skinned(bodyGeometry(), new THREE.MeshPhysicalMaterial({
-      color: '#4e0a96',
-      roughness: 0.42,
-      metalness: 0.65,
-      clearcoat: 0.3,
-      clearcoatRoughness: 0.4,
-      envMapIntensity: 0.18,
-    }));
-    skinned(calyxGeometry(), new THREE.MeshPhysicalMaterial({
-      color: '#4f8c12',
-      roughness: 0.5,
-      metalness: 0.15,
-      clearcoat: 0.4,
-      side: THREE.DoubleSide,
-      envMapIntensity: 0.3,
-    }));
-    skinned(stemGeometry(), new THREE.MeshPhysicalMaterial({
-      color: '#4a8510',
-      roughness: 0.5,
-      clearcoat: 0.4,
-      envMapIntensity: 0.3,
-    }));
+    rig.scale.setScalar(0.8);
 
-    rig.scale.setScalar(0.95);
-
-    // ---------- wobbly chain ----------
+    // ---------- soft chain ----------
     // Each bone owns a point at its tail. That point is a damped spring chasing
     // where the tail would be if the eggplant were rigid; the bone then turns
-    // to aim at it (length kept), so lag shows up as swinging and folding.
-    const SPRINGS = [
-      { k: 420, c: 14 },     // top joint: loose and bouncy
-      { k: 620, c: 20 },     // middle: a bit firmer
-      { k: 4000, c: 900 },   // tip: heavy, syrupy follow-through
-    ];
+    // to aim at it (length kept). Softer springs further down make the motion
+    // travel along the body like a wave instead of moving as one block.
+    const SPRING_K = [190, 170, 150, 135, 120, 110];
+    const DAMPING_RATIO = 0.62;
+    const MAX_BEND = 0.62;                        // per joint (rad); six of them still allow a big swing
     const chain = bones.map((bone, i) => {
-      const tailLocal = i + 1 < bones.length ? bones[i + 1].position.clone() : TIP.clone().sub(jointAt(JOINT_Y[i]));
+      const tailLocal = (i + 1 < bones.length ? heads[i + 1] : tipHang).clone().sub(heads[i]);
       return {
         bone,
         tailLocal,
         restDir: tailLocal.clone().normalize(),
         point: new THREE.Vector3(),
         vel: new THREE.Vector3(),
-        ...SPRINGS[i],
+        k: SPRING_K[i],
+        c: 2 * DAMPING_RATIO * Math.sqrt(SPRING_K[i]),
       };
     });
 
@@ -314,6 +357,8 @@
     const _head = new THREE.Vector3();
     const _dir = new THREE.Vector3();
     const _q = new THREE.Quaternion();
+    const _bend = new THREE.Quaternion();
+    const _identity = new THREE.Quaternion();
 
     function seedChain() {
       rig.updateMatrixWorld(true);
@@ -336,106 +381,35 @@
         const len = _target.distanceTo(_head);
 
         for (let s = 0; s < steps; s++) {
-          // spring force, damping applied implicitly so stiff/heavy links stay stable
+          // spring force, damping applied implicitly so it stays stable
           link.vel.addScaledVector(_dir.subVectors(_target, link.point), link.k * h).divideScalar(1 + link.c * h);
           link.point.addScaledVector(link.vel, h);
         }
 
-        // keep the bone length: project the point back onto its sphere
+        // aim the bone at the point (in its parent's space), bend limited per joint
         _dir.subVectors(link.point, _head);
         if (_dir.lengthSq() < 1e-8) _dir.subVectors(_target, _head);
-        _dir.setLength(len);
-        link.point.copy(_head).add(_dir);
-        link.vel.addScaledVector(_dir, -link.vel.dot(_dir) / (len * len));   // drop the stretching part
-
-        // aim the bone at the point (in its parent's space)
         bone.parent.getWorldQuaternion(_q).invert();
         _dir.applyQuaternion(_q).normalize();
-        bone.quaternion.setFromUnitVectors(link.restDir, _dir);
+        _bend.setFromUnitVectors(link.restDir, _dir);
+        const angle = 2 * Math.acos(clamp(_bend.w, -1, 1));
+        if (angle > MAX_BEND) _bend.slerpQuaternions(_identity, _bend, MAX_BEND / angle);
+        bone.quaternion.copy(_bend);
         bone.updateMatrixWorld(true);
+
+        // keep the point on the bone's actual tail and drop the stretching motion
+        _target.copy(link.tailLocal).applyMatrix4(bone.matrixWorld);
+        _dir.subVectors(_target, _head);
+        link.point.copy(_target);
+        link.vel.addScaledVector(_dir, -link.vel.dot(_dir) / (len * len));
       }
     }
-
-    // ---------- droplets ----------
-    function dropletGeometry() {
-      const pts = [];
-      for (let i = 0; i <= 48; i++) {
-        const t = (i / 48) * Math.PI;                       // cusp at the top, round at the bottom
-        pts.push(new THREE.Vector2(0.55 * Math.sin(t) * Math.sin(t / 2), Math.cos(t)));
-      }
-      return new THREE.LatheGeometry(pts, 48);
-    }
-    const dropletMat = new THREE.MeshPhysicalMaterial({
-      color: new THREE.Color(0, 0.3, 1),
-      metalness: 0.6,
-      roughness: 0.25,
-      clearcoat: 1,
-      sheen: 1,
-      sheenColor: new THREE.Color(1, 1, 1),
-      sheenRoughness: 0.2,
-      emissive: new THREE.Color(0, 0.2, 1),
-      emissiveIntensity: 0.3,
-      envMapIntensity: 1.2,
-    });
-    const dropletGeo = dropletGeometry();
-    const splash = new THREE.Group();
-    splash.scale.setScalar(0.45);
-    splash.rotation.x = -0.8;
-    const droplets = [
-      { pos: [1.4, -1.0], rot: 0.5, size: 1.0 },
-      { pos: [0, 0], rot: 0.3, size: 1.4 },
-      { pos: [0.6, 0.6], rot: 1.3, size: 1.55 },
-    ].map(({ pos, rot, size }) => {
-      const pivot = new THREE.Group();                        // pulses
-      const mesh = new THREE.Mesh(dropletGeo, dropletMat);     // pops in/out
-      mesh.position.set(pos[0], pos[1], 0);
-      mesh.rotation.z = rot;
-      mesh.scale.setScalar(0);
-      mesh.visible = false;
-      pivot.add(mesh);
-      splash.add(pivot);
-      return { pivot, mesh, size };
-    });
-    scene.add(splash);
-
-    const easeOut = (t) => 1 - Math.pow(1 - t, 3);
-    const easeIn = (t) => t * t * t;
-    const POP_MS = 350, COOLDOWN_MS = 4500;
-
-    // Each droplet pops in, holds, then shrinks away; scales are worked out
-    // from the clock every frame so they stay right even if frames are dropped.
-    let splashUntil = 0;
-    function burst(now) {
-      if (now < splashUntil) return;
-      splashUntil = now + COOLDOWN_MS;
-      droplets.forEach((d, i) => {
-        d.showAt = now + i * 50;
-        d.hideAt = now + 1500 - i * 50;
-      });
-    }
-
-    function updateDroplets(now) {
-      for (const d of droplets) {
-        let s = 0;
-        if (d.showAt !== undefined && now >= d.showAt) {
-          s = now < d.hideAt
-            ? d.size * easeOut(Math.min((now - d.showAt) / POP_MS, 1))
-            : d.size * (1 - easeIn(Math.min((now - d.hideAt) / POP_MS, 1)));
-        }
-        d.mesh.scale.setScalar(s);
-        d.mesh.visible = s > 0;
-      }
-    }
-
-    // compile droplet shaders up front so the first burst doesn't stutter
-    droplets.forEach((d) => { d.mesh.visible = true; });
-    renderer.compile(scene, camera);
-    droplets.forEach((d) => { d.mesh.visible = false; });
 
     // ---------- pointer → point on a plane facing the camera ----------
     const ray = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
     const camDir = camera.getWorldDirection(new THREE.Vector3());
+    const camRight = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
     const aimPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(
       camDir.clone().negate(),
       camera.position.clone().addScaledVector(camDir, 10)
@@ -447,14 +421,19 @@
       return ray.ray.intersectPlane(aimPlane, out);
     }
 
+    const _proj = new THREE.Vector3();
+    function toScreen(v, out) {
+      _proj.copy(v).project(camera);
+      out.x = (_proj.x + 1) / 2 * innerWidth;
+      out.y = (1 - _proj.y) / 2 * innerHeight;
+      return out;
+    }
+
     const target = new THREE.Vector3();
     let held = false;          // becomes true on the first pointer event
-    let pointer = null;        // latest pointer position in px
-    let lastPointer = null;    // position used on the previous frame
 
     function onPointer(e) {
       e.preventDefault();
-      pointer = { x: e.clientX, y: e.clientY };
       planePoint(e.clientX, e.clientY, target);
       held = true;
     }
@@ -469,7 +448,7 @@
       renderer.setSize(innerWidth, innerHeight);
       camera.aspect = innerWidth / innerHeight;
       camera.updateProjectionMatrix();
-      bgUniforms.aspect.value = innerHeight / innerWidth;
+      measureLetters();
     }
     addEventListener('resize', resize);
     resize();
@@ -477,76 +456,92 @@
     // ---------- pose ----------
     // Until someone touches it the eggplant lies diagonally like the emoji.
     // Once held, it hangs from the cursor facing the camera, its bottom
-    // leaning a little away from the viewer.
-    const EMOJI_TILT = 0.62, HANG_LEAN = 0.55;
+    // leaning a little away from the viewer. The root eases between poses.
+    const HANG_LEAN = 0.55;
+    const _goal = new THREE.Quaternion();
 
-    function orientRig() {
+    function orientRig(dt) {
+      const from = _q.copy(rig.quaternion);
       rig.lookAt(camera.position);
       if (held) rig.rotateX(HANG_LEAN);
       else rig.rotateZ(EMOJI_TILT);
+      if (dt === undefined) return;
+      _goal.copy(rig.quaternion);
+      rig.quaternion.copy(from).slerp(_goal, Math.min(1, 6 * dt));
     }
 
-    planePoint(innerWidth * 0.42, innerHeight * 0.32, target);
-    rig.position.copy(target);
+    // ---------- load model, then run ----------
+    const gltf = await new GLTFLoader().loadAsync(MODEL_URL);
+    gltf.scene.updateMatrixWorld(true);
+    const parts = [];
+    // the file also carries a display box and frame; only the eggplant is used
+    gltf.scene.traverse((o) => { if (o.isMesh && !/^(Box|Frame)/.test(o.name)) parts.push(o); });
+    const bounds = new THREE.Box3();
+    for (const part of parts) {
+      const mesh = rigMesh(part);
+      mesh.geometry.computeBoundingBox();
+      bounds.union(mesh.geometry.boundingBox);
+    }
+
+    // start with the whole emoji centred on screen
     orientRig();
+    rig.updateMatrixWorld(true);
+    planePoint(innerWidth / 2, innerHeight / 2, target);
+    rig.position.add(target).sub(rig.localToWorld(bounds.getCenter(new THREE.Vector3())));
+    target.copy(rig.position);
     seedChain();
 
     // ---------- loop ----------
-    const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-    const SHAKE_HI = isTouch ? 2.2 : 3.3;   // screen heights per second
-    const SHAKE_LO = SHAKE_HI * 0.85;
-    let shake = 0, shakeArmed = false;
+    // collision probes along the centre line, in screen px
+    const probes = PROBES.map(() => ({ x: 0, y: 0, vx: 0, vy: 0, r: 0, seen: false }));
+    const _pt = new THREE.Vector3(), _edge = new THREE.Vector3(), _scr = { x: 0, y: 0 };
+    const joints = [...bones.map(() => new THREE.Vector3()), new THREE.Vector3()];
+    const jointArcs = [...BONE_ARCS, TOTAL];
+
+    function updateProbes(dt) {
+      bones.forEach((b, i) => joints[i].setFromMatrixPosition(b.matrixWorld));
+      joints[bones.length].copy(chain[chain.length - 1].point);
+      // px per model unit at the eggplant's depth
+      toScreen(joints[0], _scr);
+      const x0 = _scr.x, y0 = _scr.y;
+      toScreen(_edge.copy(joints[0]).add(camRight), _scr);
+      const pxPerUnit = Math.hypot(_scr.x - x0, _scr.y - y0) * rig.scale.x;
+
+      PROBES.forEach(([arc, radius], i) => {
+        let j = 0;
+        while (j < jointArcs.length - 2 && arc > jointArcs[j + 1]) j++;
+        _pt.lerpVectors(joints[j], joints[j + 1], clamp((arc - jointArcs[j]) / (jointArcs[j + 1] - jointArcs[j]), 0, 1));
+        toScreen(_pt, _scr);
+        const p = probes[i];
+        if (p.seen && dt > 0) {
+          // lightly smoothed so one long frame doesn't fire a huge kick
+          p.vx += ((_scr.x - p.x) / dt - p.vx) * 0.6;
+          p.vy += ((_scr.y - p.y) / dt - p.vy) * 0.6;
+        }
+        p.x = _scr.x; p.y = _scr.y; p.seen = true;
+        p.r = radius * pxPerUnit;
+      });
+    }
 
     let prev = performance.now();
     function frame(now) {
       const dt = Math.min((now - prev) / 1000, 1 / 20);
       prev = now;
 
-      // shake detection: smoothed pointer speed crosses high, then falls back below low
-      let speed = 0;
-      if (pointer && lastPointer && dt > 0) {
-        speed = Math.hypot(pointer.x - lastPointer.x, pointer.y - lastPointer.y) / innerHeight / dt;
-      }
-      if (pointer) lastPointer = { ...pointer };
-      shake += (speed - shake) * Math.min(dt * 5, 1);
-      if (shake > SHAKE_HI) shakeArmed = true;
-      else if (shakeArmed && shake < SHAKE_LO) { shakeArmed = false; burst(now); }
-      rig.position.lerp(target, Math.min(20 * dt, 1));
-      orientRig();
+      rig.position.lerp(target, Math.min(16 * dt, 1));
+      orientRig(dt);
       rig.updateMatrixWorld(true);
       stepChain(dt);
 
-      // droplets ride along beside the tip and pulse
-      splash.position.copy(chain[chain.length - 1].point);
-      splash.position.x += 0.7;
-      splash.children.forEach((pivot, i) => pivot.scale.setScalar(1 + 0.05 * Math.sin(now / 80 + 40 * i)));
-      updateDroplets(now);
+      // the eggplant only knocks letters once someone is moving it
+      updateProbes(dt);
+      if (held) collide(probes, now / 1000);
+      stepLetters(dt, now / 1000);
 
       renderer.render(scene, camera);
       requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
-
-    // ---------- "???" credits ----------
-    const more = document.getElementById('more-info');
-    const popup = document.getElementById('popup');
-    let faded = false;
-    const fadeTimer = setTimeout(() => {
-      faded = true;
-      more.style.opacity = '0';
-      setTimeout(() => more.remove(), 4000);
-    }, 2500);
-    more.addEventListener('click', () => {
-      popup.classList.add('show');
-      if (faded) return;
-      clearTimeout(fadeTimer);
-      more.style.transition = 'opacity .5s ease';
-      more.style.opacity = '0';
-      setTimeout(() => more.remove(), 1000);
-    });
-    document.addEventListener('click', (e) => {
-      if (e.target === renderer.domElement) popup.classList.remove('show');
-    });
   </script>
 </body>
 </html>
