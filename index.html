@@ -58,7 +58,7 @@
     { "imports": {
       "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
       "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
-      "wiggle/spring": "https://cdn.jsdelivr.net/npm/wiggle@0.0.17/dist/WiggleSpring.mjs"
+      "wiggle/spring": "./vendor/wiggle/WiggleSpring.mjs"
     } }
   </script>
 
@@ -68,7 +68,8 @@
     import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
     import { TessellateModifier } from 'three/addons/modifiers/TessellateModifier.js';
     import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-    // Wiggle Bones for three.js (MIT) by Xavier (Jack), https://wiggle.three.tools/
+    // Wiggle Bones for three.js by Xavier (Jack), https://wiggle.three.tools/
+    // wiggle@0.0.17, shipped unmodified in vendor/wiggle (MIT, see vendor/wiggle/LICENSE)
     import { WiggleBone } from 'wiggle/spring';
 
     const MODEL_URL = 'eggplant_emoji.glb';
@@ -418,7 +419,9 @@
         map: sources[0].material.map,
         metalness: 0.92,
         roughness: 0.5,
-        side: THREE.DoubleSide,
+        // front faces only, like 🍆.ws: drawing back faces lets the inside of
+        // the calyx shell and of the body show through as extra layers when it folds
+        side: THREE.FrontSide,
       });
       useDualQuaternionSkinning(material);
       const mesh = new THREE.SkinnedMesh(geo, material);
