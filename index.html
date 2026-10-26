@@ -649,11 +649,12 @@
     // here feeds back into the physics.
     const JOINT_KNEE = 1.0, JOINT_MAX = 1.6;      // rad, per physics joint
     const CURL_KNEE = 1.8, CURL_MAX = 2.6;        // rad, all body joints together
-    // A crease appears where the bend's radius gets smaller than the body is
-    // thick (the inner side then runs into itself). Shares of neighbouring
-    // joints can stack up at one spot, so each render joint is also eased so
-    // its own radius stays above the local body radius (with a little margin).
-    const CREASE_MARGIN = 1.15;
+    // A crease appears where the bend's radius gets close to the body radius:
+    // the inner side is squeezed toward nothing and folds. Shares of
+    // neighbouring joints can stack up at one spot, so each render joint is
+    // also eased so the bend radius stays well above the local body radius
+    // (1.7x keeps the inner side visibly round).
+    const CREASE_MARGIN = 1.7;
     const bodyRadius = (arc) => {
       let i = 0;
       while (i < PROBES.length - 2 && arc > PROBES[i + 1][0]) i++;
@@ -691,8 +692,8 @@
         const angle = 2 * Math.acos(Math.min(1, Math.abs(q.w)));
         // the thin tip uses the thick body's radius too: curled tighter, it
         // would fold back against the wider part above it
-        const most = RENDER_STEP / (Math.max(bodyRadius(renderArcs[k]), 0.95) * CREASE_MARGIN);
-        if (angle > 0.6 * most) q.slerpQuaternions(_rest, _part.copy(q), softCap(angle, 0.6 * most, most) / angle);
+        const most = RENDER_STEP / (Math.max(bodyRadius(renderArcs[k]), 1.0) * CREASE_MARGIN);
+        if (angle > 0.5 * most) q.slerpQuaternions(_rest, _part.copy(q), softCap(angle, 0.5 * most, most) / angle);
       });
       rig.updateMatrixWorld(true);
     }
